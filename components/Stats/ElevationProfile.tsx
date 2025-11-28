@@ -5,10 +5,12 @@ import type { ElevationData } from '@/types/route';
 
 interface ElevationProfileProps {
   elevation: ElevationData;
+  canvasRef?: React.RefObject<HTMLCanvasElement | null>;
 }
 
-export default function ElevationProfile({ elevation }: ElevationProfileProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+export default function ElevationProfile({ elevation, canvasRef: externalCanvasRef }: ElevationProfileProps) {
+  const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = externalCanvasRef || internalCanvasRef;
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import type { LatLng, MapMarker } from '@/types/map';
 import type { Route } from '@/types/route';
@@ -9,6 +9,9 @@ import { DEFAULT_COEFFICIENTS } from '@/lib/terrain/coefficients';
 import RouteStats from '../Stats/RouteStats';
 import ElevationProfile from '../Stats/ElevationProfile';
 import TerrainSettings from '../Controls/TerrainSettings';
+import ExportButtons from '../Export/ExportButtons';
+import SaveRouteDialog from '../Export/SaveRouteDialog';
+import RouteHistory from '../Export/RouteHistory';
 
 // Dynamic import for SSR compatibility
 const BaseMap = dynamic(() => import('./BaseMap'), {
@@ -38,6 +41,9 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
   const [isCalculating, setIsCalculating] = useState(false);
   const [coefficients, setCoefficients] = useState<TerrainCoefficients>(DEFAULT_COEFFICIENTS);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const elevationCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleMarkerAdd = useCallback((position: LatLng, type: 'start' | 'end') => {
     const newMarker: MapMarker = {
@@ -123,6 +129,26 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
     setRoute(null);
   };
 
+  const handleLoadRoute = (loadedRoute: Route) => {
+    setRoute(loadedRoute);
+    
+    // Set markers from loaded route
+    const newMarkers: MapMarker[] = [
+      {
+        id: `start-${Date.now()}`,
+        type: 'start',
+        position: loadedRoute.start,
+      },
+      {
+        id: `end-${Date.now()}`,
+        type: 'end',
+        position: loadedRoute.end,
+      },
+    ];
+    
+    setMarkers(newMarkers);
+  };
+
   return (
     <div className="relative w-full h-full flex flex-col lg:flex-row">
       {/* Map container */}
@@ -138,6 +164,16 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
 
         {/* Controls overlay - desktop */}
         <div className="hidden lg:flex absolute top-4 right-4 z-[1000] flex-col gap-2">
+          <button
+            onClick={() => setShowHistory(true)}
+            className="bg-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-50 transition-colors font-medium text-sm flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            История
+          </button>
+          
           {markers.length > 0 && (
             <button
               onClick={handleClearRoute}
@@ -200,9 +236,24 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
       {/* Statistics sidebar - desktop */}
       {route && (
         <div className="hidden lg:block w-96 bg-gray-50 p-4 overflow-y-auto space-y-4 order-2">
+          {/* Save and Export buttons */}
+          <div className="bg-white rounded-lg shadow-lg p-4 space-y-3">
+            <h3 className="font-bold text-sm text-gray-700">Действия</h3>
+            <button
+              onClick={() => setShowSaveDialog(true)}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium text-sm"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+              Сохранить маршрут
+            </button>
+            <ExportButtons route={route} elevationCanvasRef={elevationCanvasRef} />
+          </div>
+
           <TerrainSettings onCoefficientsChange={handleCoefficientsChange} />
           <RouteStats route={route} />
-          {route.elevation && <ElevationProfile elevation={route.elevation} />}
+          {route.elevation && <ElevationProfile elevation={route.elevation} canvasRef={elevationCanvasRef} />}
         </div>
       )}
 
@@ -225,12 +276,44 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
               </button>
             </div>
             <div className="p-4 space-y-4">
+              {/* Save and Export buttons */}
+              <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+                <button
+                  onClick={() => setShowSaveDialog(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium text-sm"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                  Сохранить маршрут
+                </button>
+                <ExportButtons route={route} elevationCanvasRef={elevationCanvasRef} />
+              </div>
+
               <TerrainSettings onCoefficientsChange={handleCoefficientsChange} />
               <RouteStats route={route} />
-              {route.elevation && <ElevationProfile elevation={route.elevation} />}
+              {route.elevation && <ElevationProfile elevation={route.elevation} canvasRef={elevationCanvasRef} />}
             </div>
           </div>
         </div>
+      )}
+
+      {/* Dialogs */}
+      {showSaveDialog && route && (
+        <SaveRouteDialog
+          route={route}
+          onSave={(savedRoute) => {
+            setRoute(savedRoute);
+          }}
+          onClose={() => setShowSaveDialog(false)}
+        />
+      )}
+
+      {showHistory && (
+        <RouteHistory
+          onLoadRoute={handleLoadRoute}
+          onClose={() => setShowHistory(false)}
+        />
       )}
     </div>
   );
