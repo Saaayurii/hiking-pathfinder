@@ -1,0 +1,112 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Route {
+  id          String   @id @default(cuid())
+  name        String
+
+  // Start and end coordinates
+  startLat    Float
+  startLng    Float
+  endLat      Float
+  endLng      Float
+
+  // Waypoints and path (stored as JSON)
+  waypoints   Json?    // Array of {lat, lng} objects
+  path        Json     // Array of {lat, lng} objects representing the route
+
+  // Route statistics
+  distance    Float    // Distance in meters
+  duration    Float    // Estimated duration in seconds
+
+  // Elevation data (stored as JSON)
+  elevation   Json?    // {gain: number, loss: number, max: number, min: number, profile: [{distance, elevation}]}
+
+  // Zone statistics (stored as JSON)
+  zoneStats   Json?    // Distribution of terrain types, coefficients, etc.
+
+  // Trail quality data from OpenTrailMap (stored as JSON)
+  trailQuality Json?   // {avgVisibility, avgSmoothness, officialPercent, avgWidth}
+
+  // User relationship (optional for future implementation)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model TerrainZone {
+  id            String   @id @default(cuid())
+
+  // Boundaries (stored as GeoJSON polygon)
+  bounds        Json
+
+  // Terrain characteristics
+  terrainType   String   // e.g., "forest", "wetland", "grassland", "path"
+  coefficient   Float    // Walkability coefficient 1.0-10.0
+
+  // Elevation data
+  avgElevation  Float?
+  avgSlope      Float?   // Average slope in degrees
+
+  // Trail attributes from OpenTrailMap
+  visibility    String?  // excellent, good, intermediate, bad, horrible, no
+  smoothness    String?  // excellent, good, intermediate, bad, very_bad, horrible
+  width         Float?   // Width in meters
+  informal      Boolean  @default(false)
+  surface       String?  // paved, asphalt, gravel, ground, grass, sand, rock, mud
+
+  createdAt     DateTime @default(now())
+
+  @@index([terrainType])
+  @@index([coefficient])
+}
+
+model TrailSegment {
+  id           String   @id @default(cuid())
+
+  // OpenStreetMap reference
+  osmId        String   @unique
+  name         String?
+
+  // Geometry (stored as GeoJSON LineString)
+  geometry     Json
+
+  // Trail attributes from OSM tags
+  surface      String?  // Type of surface
+  smoothness   String?  // Quality of surface
+  visibility   String?  // Trail visibility
+  width        Float?   // Width in meters
+  incline      String?  // Incline percentage or description
+  informal     Boolean  @default(false)
+  trailType    String?  // OSM highway tag (path, footway, track, etc.)
+  access       String?  // Access restrictions
+
+  lastUpdated  DateTime @default(now())
+
+  @@index([osmId])
+  @@index([trailType])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  routes    Route[]
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
