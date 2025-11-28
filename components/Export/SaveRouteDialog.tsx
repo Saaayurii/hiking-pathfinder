@@ -75,11 +75,11 @@ export default function SaveRouteDialog({ route, onSave, onClose }: SaveRouteDia
           {/* Route info */}
           <div className="bg-gray-50 p-3 rounded-lg text-sm space-y-1">
             <div className="flex justify-between">
-              <span className="text-gray-600">Расстояние:</span>
+              <span className="text-black-600">Расстояние:</span>
               <span className="font-medium">{(route.distance / 1000).toFixed(2)} км</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-600">Время:</span>
+              <span className="text-black-600">Время:</span>
               <span className="font-medium">
                 {Math.floor(route.duration / 3600) > 0 && `${Math.floor(route.duration / 3600)} ч `}
                 {Math.floor((route.duration % 3600) / 60)} мин
@@ -87,7 +87,7 @@ export default function SaveRouteDialog({ route, onSave, onClose }: SaveRouteDia
             </div>
             {route.elevation && (
               <div className="flex justify-between">
-                <span className="text-gray-600">Набор высоты:</span>
+                <span className="text-black-600">Набор высоты:</span>
                 <span className="font-medium">{Math.round(route.elevation.gain)} м</span>
               </div>
             )}

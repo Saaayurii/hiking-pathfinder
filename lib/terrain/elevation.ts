@@ -2,6 +2,8 @@
  * Elevation data utilities using Open-Elevation API
  * Free alternative to Mapbox Terrain RGB
  * API: https://open-elevation.com/
+ *
+ * Note: Open-Elevation can be slow/unreliable, falls back to approximate elevation
  */
 
 export interface ElevationPoint {
@@ -11,48 +13,72 @@ export interface ElevationPoint {
 }
 
 const OPEN_ELEVATION_API = 'https://api.open-elevation.com/api/v1/lookup';
+const FETCH_TIMEOUT = 8000; // 8 second timeout per request (increased from 5s)
+const BATCH_SIZE = 50; // Reduced from 100 to 50 for better reliability
 
 /**
  * Fetch elevation data for multiple points
- * Open-Elevation API accepts up to 100 points per request
+ * Using smaller batches for better reliability
  */
 export async function fetchElevations(
   points: Array<{ lat: number; lng: number }>
 ): Promise<number[]> {
   try {
-    // Split into chunks of 100 points
-    const chunks = chunkArray(points, 100);
+    // Split into smaller chunks for better reliability
+    const chunks = chunkArray(points, BATCH_SIZE);
     const allElevations: number[] = [];
 
-    for (const chunk of chunks) {
+    console.log(`📡 Fetching elevation data: ${chunks.length} requests for ${points.length} points`);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
       const locations = chunk.map((p) => ({
         latitude: p.lat,
         longitude: p.lng,
       }));
 
-      const response = await fetch(OPEN_ELEVATION_API, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ locations }),
-      });
+      console.log(`  Request ${i + 1}/${chunks.length}: fetching ${chunk.length} points...`);
 
-      if (!response.ok) {
-        throw new Error(`Elevation API error: ${response.statusText}`);
+      try {
+        // Add timeout to fetch
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+        const response = await fetch(OPEN_ELEVATION_API, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ locations }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`Elevation API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const elevations = data.results.map((r: ElevationPoint) => r.elevation);
+        allElevations.push(...elevations);
+
+        console.log(`  ✓ Received ${elevations.length} elevations (${allElevations.length}/${points.length} total)`);
+      } catch (chunkError) {
+        console.warn(`  ⚠️  Timeout or error for chunk ${i + 1}, using approximate elevation (200m)`);
+        // Use approximate elevation if API fails
+        const approximateElevations = new Array(chunk.length).fill(200);
+        allElevations.push(...approximateElevations);
       }
 
-      const data = await response.json();
-      const elevations = data.results.map((r: ElevationPoint) => r.elevation);
-      allElevations.push(...elevations);
-
-      // Rate limiting: wait 100ms between requests
-      if (chunks.length > 1) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      // Rate limiting: wait 200ms between requests (increased from 100ms)
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }
 
+    console.log(`✅ All elevation data fetched: ${allElevations.length} points`);
     return allElevations;
   } catch (error) {
     console.error('Error fetching elevation data:', error);

@@ -5,6 +5,8 @@ import { fetchElevations, calculateElevationStats, createElevationProfile } from
 import { buildTerrainGraph, createNodeId } from '@/lib/pathfinding/graph';
 import { findPath, smoothPath } from '@/lib/pathfinding/astar';
 import { calculateDistance } from '@/lib/utils/geo';
+import { fetchOverpassData } from '@/lib/osm/overpass';
+import { extractTerrainFeatures, getTerrainCoefficientAtPoint, type TerrainFeature } from '@/lib/osm/terrain';
 
 const PathfindingRequestSchema = z.object({
   start: z.object({
@@ -43,11 +45,55 @@ export async function POST(request: NextRequest) {
     console.log(`  Start: ${start.lat}, ${start.lng}`);
     console.log(`  End: ${end.lat}, ${end.lng}`);
 
+    // Step 0: Fetch OSM data for terrain and obstacles
+    console.log('🌍 Fetching OSM terrain data...');
+
+    // Dynamic grid size based on route distance
+    // For long routes, use larger grid to reduce memory usage
+    let gridSize = options.gridSizeMeters || 30; // Increased from 20 to 30
+    const distance = calculateDistance(start, end);
+
+    if (distance > 50000) { // > 50km
+      gridSize = 100; // 100m grid
+    } else if (distance > 20000) { // > 20km
+      gridSize = 50; // 50m grid
+    }
+
+    // Reduce padding for longer routes to limit grid size
+    const padding = distance > 20000 ? 0.005 : 0.01; // Smaller padding for long routes
+
+    const minLat = Math.min(start.lat, end.lat) - padding;
+    const maxLat = Math.max(start.lat, end.lat) + padding;
+    const minLng = Math.min(start.lng, end.lng) - padding;
+    const maxLng = Math.max(start.lng, end.lng) + padding;
+
+    const bounds = {
+      north: maxLat,
+      south: minLat,
+      east: maxLng,
+      west: minLng,
+    };
+
+    let osmData;
+    let terrainFeatures: TerrainFeature[] = [];
+
+    try {
+      // For short routes, try to get OSM data, but don't wait too long
+      if (distance < 5000) { // Only for routes < 5km
+        osmData = await fetchOverpassData(bounds, true); // Use pathfinding query
+        terrainFeatures = extractTerrainFeatures(osmData);
+        console.log(`  ✓ Loaded ${osmData.elements.length} OSM elements`);
+        console.log(`  ✓ Extracted ${terrainFeatures.length} terrain features`);
+      } else {
+        console.log('  ⊘ Skipping OSM data for long route (using default terrain)');
+      }
+    } catch (error) {
+      console.warn('  ⚠️  Failed to fetch OSM data, using default terrain');
+      // Continue without OSM data - will use default coefficients
+    }
+
     // Step 1: Build terrain grid and fetch elevation data
     console.log('📊 Building terrain grid...');
-
-    const gridSize = options.gridSizeMeters || 20;
-    const distance = calculateDistance(start, end);
 
     // Estimate grid points needed
     const estimatedPoints = Math.ceil(distance / gridSize) * 10; // Rough estimate with padding
@@ -60,13 +106,6 @@ export async function POST(request: NextRequest) {
     const gridPoints: Array<{ lat: number; lng: number }> = [];
     const elevationDataMap = new Map<string, number>();
     const terrainDataMap = new Map<string, { type: string; coefficient: number }>();
-
-    // Calculate bounds
-    const padding = 0.01;
-    const minLat = Math.min(start.lat, end.lat) - padding;
-    const maxLat = Math.max(start.lat, end.lat) + padding;
-    const minLng = Math.min(start.lng, end.lng) - padding;
-    const maxLng = Math.max(start.lng, end.lng) + padding;
 
     // Convert grid size to degrees
     const latStep = gridSize / 111000;
@@ -105,12 +144,15 @@ export async function POST(request: NextRequest) {
     // Map elevations to grid
     gridPoints.forEach((point, i) => {
       const nodeId = createNodeId(point.lat, point.lng);
-      elevationDataMap.set(nodeId, elevations[i] || 0);
+      const elevation = elevations[i] || 0;
+      elevationDataMap.set(nodeId, elevation);
 
-      // Default terrain (will be enhanced with OSM data later)
+      // Get terrain data from OSM features
+      const terrainInfo = getTerrainCoefficientAtPoint(point, terrainFeatures);
+
       terrainDataMap.set(nodeId, {
-        type: 'path',
-        coefficient: 2.0,
+        type: terrainInfo.type,
+        coefficient: terrainInfo.coefficient,
       });
     });
 
@@ -134,15 +176,29 @@ export async function POST(request: NextRequest) {
           }
 
           elevationDataMap.set(nodeId, nearestElev);
+
+          // Get terrain data from OSM features
+          const terrainInfo = getTerrainCoefficientAtPoint({ lat, lng }, terrainFeatures);
+
           terrainDataMap.set(nodeId, {
-            type: 'path',
-            coefficient: 2.0,
+            type: terrainInfo.type,
+            coefficient: terrainInfo.coefficient,
           });
         }
       }
     }
 
     console.log(`✅ Elevation data ready (${elevationDataMap.size} points)`);
+
+    // Check if grid is too large
+    const MAX_NODES = 500000; // 500k nodes max to prevent memory issues
+    if (elevationDataMap.size > MAX_NODES) {
+      console.error(`❌ Grid too large: ${elevationDataMap.size} nodes (max: ${MAX_NODES})`);
+      return NextResponse.json({
+        success: false,
+        error: `Маршрут слишком длинный. Попробуйте сократить расстояние или выбрать точки ближе друг к другу. (${(distance / 1000).toFixed(1)}км)`,
+      }, { status: 400 });
+    }
 
     // Step 2: Build graph
     console.log('🕸️  Building pathfinding graph...');
@@ -176,9 +232,10 @@ export async function POST(request: NextRequest) {
     console.log(`  Path length: ${result.path.length} points`);
     console.log(`  Distance: ${(result.distance / 1000).toFixed(2)}km`);
 
-    // Step 4: Smooth path
-    const smoothedPath = smoothPath(result.path, 0.00005);
-    console.log(`  Smoothed to: ${smoothedPath.length} points`);
+    // Step 4: Smooth path (temporarily disabled for debugging)
+    // TODO: Fix smoothPath algorithm - currently over-simplifying routes
+    const smoothedPath = result.path; // smoothPath(result.path, 50);
+    console.log(`  Path points: ${smoothedPath.length}`);
 
     // Step 5: Calculate statistics
     const pathElevations = smoothedPath.map(p => p.elevation);
@@ -198,6 +255,7 @@ export async function POST(request: NextRequest) {
           ...elevationStats,
           profile: elevationProfile,
         },
+        terrainFeatures, // Include terrain features for visualization
       },
     };
 

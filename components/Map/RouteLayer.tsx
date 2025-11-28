@@ -9,17 +9,28 @@ interface RouteLayerProps {
 
 export default function RouteLayer({ route }: RouteLayerProps) {
   if (!route || route.length === 0) {
+    console.log('⚠️  RouteLayer: No route data');
     return null;
   }
 
   const positions: [number, number][] = route.map(point => [point.lat, point.lng]);
 
+  console.log('🗺️  RouteLayer rendering:', {
+    points: route.length,
+    firstPoint: positions[0],
+    lastPoint: positions[positions.length - 1]
+  });
+
   return (
     <Polyline
       positions={positions}
-      color="#3b82f6"
-      weight={5}
-      opacity={0.8}
+      pathOptions={{
+        color: '#ef4444',
+        weight: 6,
+        opacity: 0.9,
+        lineJoin: 'round',
+        lineCap: 'round'
+      }}
     />
   );
 }

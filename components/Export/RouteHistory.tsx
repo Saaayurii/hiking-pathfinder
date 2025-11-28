@@ -100,7 +100,7 @@ export default function RouteHistory({ onLoadRoute, onClose }: RouteHistoryProps
             onClick={onClose}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
-            <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6 text-black-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -140,7 +140,7 @@ export default function RouteHistory({ onLoadRoute, onClose }: RouteHistoryProps
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <h3 className="font-semibold text-lg mb-2 truncate">{route.name}</h3>
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-black-600">
                         <div>
                           <span className="text-gray-500">Расстояние:</span>{' '}
                           <span className="font-medium">{(route.distance / 1000).toFixed(2)} км</span>

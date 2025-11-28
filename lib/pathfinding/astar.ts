@@ -4,7 +4,7 @@
 
 import type { PathfindingGraph, GraphNode, PathfindingResult, PriorityQueueItem } from './types';
 import { defaultHeuristic } from './heuristics';
-import { createNodeId, getNeighbors, getEdge, resetGraph } from './graph';
+import { createNodeId, getNeighbors, getEdge, resetGraph, findNearestNode } from './graph';
 
 /**
  * Priority Queue implementation using binary heap
@@ -88,14 +88,30 @@ export function findPath(
   // Reset graph state
   resetGraph(graph);
 
-  const startId = createNodeId(start.lat, start.lng);
-  const goalId = createNodeId(goal.lat, goal.lng);
-
-  const startNode = graph.nodes.get(startId);
-  const goalNode = graph.nodes.get(goalId);
+  // Find nearest nodes to start and goal (they might not be exact grid points)
+  const startNode = findNearestNode(graph, start);
+  const goalNode = findNearestNode(graph, goal);
 
   if (!startNode || !goalNode) {
     console.error('Start or goal node not found in graph');
+    return null;
+  }
+
+  console.log(`  Using nearest start node: ${startNode.lat.toFixed(6)}, ${startNode.lng.toFixed(6)}`);
+  console.log(`  Using nearest goal node: ${goalNode.lat.toFixed(6)}, ${goalNode.lng.toFixed(6)}`);
+
+  // Debug: Check connectivity
+  const startNeighbors = getNeighbors(graph, startNode.id);
+  const goalNeighbors = getNeighbors(graph, goalNode.id);
+  console.log(`  Start node has ${startNeighbors.length} neighbors`);
+  console.log(`  Goal node has ${goalNeighbors.length} neighbors`);
+
+  if (startNeighbors.length === 0) {
+    console.error('❌ Start node is isolated (no neighbors)!');
+    return null;
+  }
+  if (goalNeighbors.length === 0) {
+    console.error('❌ Goal node is isolated (no neighbors)!');
     return null;
   }
 
@@ -115,7 +131,7 @@ export function findPath(
     const current = openSet.pop()!.node;
 
     // Goal reached
-    if (current.id === goalId) {
+    if (current.id === goalNode.id) {
       return reconstructPath(current, nodesExplored);
     }
 
@@ -220,10 +236,12 @@ function haversineDistance(
 /**
  * Smooth path by removing unnecessary waypoints
  * Uses Douglas-Peucker algorithm
+ * @param path - Array of path points
+ * @param epsilon - Tolerance in meters (not degrees!) - larger value = more simplification
  */
 export function smoothPath(
   path: Array<{ lat: number; lng: number; elevation: number }>,
-  epsilon: number = 0.0001
+  epsilon: number = 50
 ): Array<{ lat: number; lng: number; elevation: number }> {
   if (path.length <= 2) return path;
 

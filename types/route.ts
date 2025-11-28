@@ -32,6 +32,14 @@ export interface TrailQuality {
   avgWidth: number | null;
 }
 
+export interface TerrainFeature {
+  type: string;
+  geometry: Array<{ lat: number; lng: number }>;
+  tags?: Record<string, string>;
+  passable: boolean;
+  coefficient: number;
+}
+
 export interface Route {
   id?: string;
   name: string;
@@ -44,6 +52,7 @@ export interface Route {
   elevation?: ElevationData;
   zoneStats?: ZoneStatistics;
   trailQuality?: TrailQuality;
+  terrainFeatures?: TerrainFeature[]; // OSM terrain features for visualization
   createdAt?: Date;
   updatedAt?: Date;
 }

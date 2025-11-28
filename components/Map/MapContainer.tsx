@@ -12,13 +12,14 @@ import TerrainSettings from '../Controls/TerrainSettings';
 import ExportButtons from '../Export/ExportButtons';
 import SaveRouteDialog from '../Export/SaveRouteDialog';
 import RouteHistory from '../Export/RouteHistory';
+import RouteProgress from './RouteProgress';
 
 // Dynamic import for SSR compatibility
 const BaseMap = dynamic(() => import('./BaseMap'), {
   ssr: false,
   loading: () => (
     <div className="w-full h-full flex items-center justify-center bg-gray-100">
-      <div className="text-gray-600">Загрузка карты...</div>
+      <div className="text-black-600">Загрузка карты...</div>
     </div>
   ),
 });
@@ -31,6 +32,14 @@ const RouteLayer = dynamic(() => import('./RouteLayer'), {
   ssr: false,
 });
 
+const TerrainLayer = dynamic(() => import('./TerrainLayer'), {
+  ssr: false,
+});
+
+const TerrainLegend = dynamic(() => import('./TerrainLegend'), {
+  ssr: false,
+});
+
 interface MapContainerProps {
   onRouteCalculated?: (route: Route) => void;
 }
@@ -39,6 +48,7 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
   const [markers, setMarkers] = useState<MapMarker[]>([]);
   const [route, setRoute] = useState<Route | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [calculationStage, setCalculationStage] = useState<'idle' | 'osm' | 'elevation' | 'graph' | 'pathfinding' | 'complete'>('idle');
   const [coefficients, setCoefficients] = useState<TerrainCoefficients>(DEFAULT_COEFFICIENTS);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -95,6 +105,12 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
     if (!start || !end) return;
 
     setIsCalculating(true);
+    setCalculationStage('osm');
+
+    // Simulate progress stages
+    const progressTimer = setTimeout(() => setCalculationStage('elevation'), 1000);
+    const progressTimer2 = setTimeout(() => setCalculationStage('graph'), 3000);
+    const progressTimer3 = setTimeout(() => setCalculationStage('pathfinding'), 5000);
 
     try {
       const response = await fetch('/api/pathfinding', {
@@ -114,13 +130,28 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
       const data = await response.json();
 
       if (data.success && data.route) {
-        setRoute(data.route);
-        onRouteCalculated?.(data.route);
+        console.log('✅ Route received:', {
+          pathLength: data.route.path?.length,
+          distance: data.route.distance,
+          hasPath: !!data.route.path
+        });
+        setCalculationStage('complete');
+        setTimeout(() => {
+          setRoute(data.route);
+          onRouteCalculated?.(data.route);
+          setIsCalculating(false);
+        }, 500);
+      } else {
+        console.error('❌ Route calculation failed:', data.error);
+        setIsCalculating(false);
       }
     } catch (error) {
       console.error('Error calculating route:', error);
-    } finally {
       setIsCalculating(false);
+    } finally {
+      clearTimeout(progressTimer);
+      clearTimeout(progressTimer2);
+      clearTimeout(progressTimer3);
     }
   };
 
@@ -153,14 +184,18 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
     <div className="relative w-full h-full flex flex-col lg:flex-row">
       {/* Map container */}
       <div className="flex-1 relative order-2 lg:order-1">
-        <BaseMap center={{ lat: 55.7558, lng: 37.6173 }} zoom={10}>
+        <BaseMap center={{ lat: 48.0159, lng: 37.8028 }} zoom={10}>
           <MarkerControls
             markers={markers}
             onMarkerAdd={handleMarkerAdd}
             onMarkerMove={handleMarkerMove}
           />
+          {route?.terrainFeatures && <TerrainLayer features={route.terrainFeatures} />}
           <RouteLayer route={route?.path || []} />
         </BaseMap>
+
+        {/* Terrain Legend */}
+        {route?.terrainFeatures && route.terrainFeatures.length > 0 && <TerrainLegend />}
 
         {/* Controls overlay - desktop */}
         <div className="hidden lg:flex absolute top-4 right-4 z-[1000] flex-col gap-2">
@@ -183,7 +218,7 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
             </button>
           )}
           {isCalculating && (
-            <div className="bg-white px-4 py-2 rounded-lg shadow-lg text-sm text-gray-600">
+            <div className="bg-white px-4 py-2 rounded-lg shadow-lg text-sm text-black-600">
               Расчёт маршрута...
             </div>
           )}
@@ -207,13 +242,13 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
               onClick={handleClearRoute}
               className="bg-white px-3 py-2 rounded-lg shadow-lg hover:bg-gray-50 transition-colors"
             >
-              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5 text-black-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           )}
           {isCalculating && (
-            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm text-gray-600 flex-1 text-center">
+            <div className="bg-white px-3 py-2 rounded-lg shadow-lg text-sm text-black-600 flex-1 text-center">
               Расчёт...
             </div>
           )}
@@ -270,14 +305,14 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
                 onClick={() => setIsMobileSidebarOpen(false)}
                 className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-6 h-6 text-black-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
             <div className="p-4 space-y-4">
               {/* Save and Export buttons */}
-              <div className="bg-white border border-gray-200 rounded-lg p-4 space-y-3">
+              <div className="bg-white border border-black-200 rounded-lg p-4 space-y-3">
                 <button
                   onClick={() => setShowSaveDialog(true)}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium text-sm"
@@ -315,6 +350,9 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
           onClose={() => setShowHistory(false)}
         />
       )}
+
+      {/* Route calculation progress */}
+      {isCalculating && <RouteProgress stage={calculationStage} />}
     </div>
   );
 }

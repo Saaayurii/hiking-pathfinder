@@ -92,42 +92,8 @@ export async function buildTerrainGraph(
     }
   }
 
-  // Add start and goal nodes if not in grid
-  const startId = createNodeId(start.lat, start.lng);
-  if (!nodes.has(startId)) {
-    nodes.set(startId, {
-      id: startId,
-      lat: start.lat,
-      lng: start.lng,
-      elevation: elevationData.get(startId) || 0,
-      coefficient: 1.0,
-      g: Infinity,
-      h: 0,
-      f: Infinity,
-      parent: null,
-      closed: false,
-      opened: false,
-    });
-    edges.set(startId, []);
-  }
-
-  const goalId = createNodeId(goal.lat, goal.lng);
-  if (!nodes.has(goalId)) {
-    nodes.set(goalId, {
-      id: goalId,
-      lat: goal.lat,
-      lng: goal.lng,
-      elevation: elevationData.get(goalId) || 0,
-      coefficient: 1.0,
-      g: Infinity,
-      h: 0,
-      f: Infinity,
-      parent: null,
-      closed: false,
-      opened: false,
-    });
-    edges.set(goalId, []);
-  }
+  // Note: We'll add start and goal nodes AFTER creating edges,
+  // so we don't need to add them here
 
   // Create edges (8-directional connectivity)
   const directions = [
@@ -180,6 +146,27 @@ export async function buildTerrainGraph(
     edges.set(nodeId, nodeEdges);
   }
 
+  // Debug: Graph connectivity statistics
+  let totalEdges = 0;
+  let connectedNodes = 0;
+  let isolatedNodes = 0;
+
+  for (const [nodeId, nodeEdges] of edges) {
+    totalEdges += nodeEdges.length;
+    if (nodeEdges.length > 0) {
+      connectedNodes++;
+    } else {
+      isolatedNodes++;
+    }
+  }
+
+  console.log(`🕸️  Building pathfinding graph...`);
+  console.log(`  Nodes: ${nodes.size}`);
+  console.log(`  Connected nodes: ${connectedNodes}`);
+  console.log(`  Isolated nodes: ${isolatedNodes}`);
+  console.log(`  Edges: ${totalEdges}`);
+  console.log(`  Avg edges per node: ${(totalEdges / nodes.size).toFixed(1)}`);
+
   return { nodes, edges };
 }
 
@@ -217,4 +204,29 @@ export function resetGraph(graph: PathfindingGraph): void {
     node.closed = false;
     node.opened = false;
   }
+}
+
+/**
+ * Find nearest node in graph to given coordinates
+ */
+export function findNearestNode(
+  graph: PathfindingGraph,
+  target: { lat: number; lng: number }
+): GraphNode | null {
+  let nearestNode: GraphNode | null = null;
+  let minDistance = Infinity;
+
+  for (const node of graph.nodes.values()) {
+    const distance = haversineHeuristic(
+      { lat: node.lat, lng: node.lng },
+      target
+    );
+
+    if (distance < minDistance) {
+      minDistance = distance;
+      nearestNode = node;
+    }
+  }
+
+  return nearestNode;
 }

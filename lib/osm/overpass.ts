@@ -67,32 +67,93 @@ export function buildTrailQuery(bounds: OverpassBounds): string {
 }
 
 /**
- * Fetch data from Overpass API
+ * Build Overpass QL query for pathfinding with obstacles and terrain
+ */
+export function buildPathfindingQuery(bounds: OverpassBounds): string {
+  const bbox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
+
+  return `
+    [out:json][timeout:30];
+    (
+      // Buildings - impassable
+      way["building"](${bbox});
+      relation["building"](${bbox});
+
+      // Barriers - impassable or difficult
+      way["barrier"~"wall|fence|hedge|city_wall"](${bbox});
+      node["barrier"~"gate|lift_gate|stile|kissing_gate"](${bbox});
+
+      // Roads and paths - walkable with different coefficients
+      way["highway"~"path|footway|track|bridleway|cycleway|steps"](${bbox});
+      way["highway"~"residential|service|unclassified"]["foot"!="no"](${bbox});
+
+      // Natural terrain - different walking difficulty
+      way["natural"="wood"](${bbox});
+      way["landuse"="forest"](${bbox});
+      way["natural"="grassland"](${bbox});
+      way["natural"="scrub"](${bbox});
+      way["natural"="heath"](${bbox});
+      way["natural"="bare_rock"](${bbox});
+      way["natural"="scree"](${bbox});
+
+      // Water - impassable
+      way["natural"="water"](${bbox});
+      way["waterway"~"river|stream|canal|ditch"](${bbox});
+      way["natural"="wetland"](${bbox});
+
+      // Railways - impassable
+      way["railway"](${bbox});
+    );
+    out body;
+    >;
+    out skel qt;
+  `.trim();
+}
+
+/**
+ * Fetch data from Overpass API with retry logic
  */
 export async function fetchOverpassData(
-  bounds: OverpassBounds
+  bounds: OverpassBounds,
+  usePathfindingQuery = false,
+  retries = 2
 ): Promise<OverpassResponse> {
-  const query = buildTrailQuery(bounds);
+  const query = usePathfindingQuery ? buildPathfindingQuery(bounds) : buildTrailQuery(bounds);
 
-  try {
-    const response = await fetch(OVERPASS_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: `data=${encodeURIComponent(query)}`,
-    });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-    if (!response.ok) {
-      throw new Error(`Overpass API error: ${response.statusText}`);
+      const response = await fetch(OVERPASS_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`Overpass API error: ${response.statusText}`);
+      }
+
+      const data: OverpassResponse = await response.json();
+      return data;
+    } catch (error) {
+      if (attempt < retries) {
+        console.warn(`Overpass API attempt ${attempt + 1} failed, retrying...`);
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
+        continue;
+      }
+      console.error('Error fetching Overpass data after retries:', error);
+      throw error;
     }
-
-    const data: OverpassResponse = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Error fetching Overpass data:', error);
-    throw error;
   }
+
+  throw new Error('Failed to fetch Overpass data');
 }
 
 /**
