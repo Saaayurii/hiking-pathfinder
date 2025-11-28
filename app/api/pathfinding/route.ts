@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { PathfindingResponse } from '@/types/api';
 import type { RoutePoint } from '@/types/route';
+import { fetchElevations, calculateElevationStats, createElevationProfile } from '@/lib/terrain/elevation';
+import { calculateSlope, getSlopeFactor } from '@/lib/terrain/slope';
 
 const PathfindingRequestSchema = z.object({
   start: z.object({
@@ -26,8 +28,9 @@ const PathfindingRequestSchema = z.object({
 });
 
 /**
- * Simple straight-line pathfinding endpoint
- * TODO: Replace with A* algorithm and terrain data integration
+ * Enhanced pathfinding with elevation data
+ * Still using straight line, but now with terrain analysis
+ * TODO: Replace with A* algorithm
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,9 +39,8 @@ export async function POST(request: NextRequest) {
 
     const { start, end } = validated;
 
-    // For now, create a simple straight line between start and end
-    // with 50 interpolated points for smooth visualization
-    const numPoints = 50;
+    // Create path with more points for better elevation accuracy
+    const numPoints = 100;
     const path: RoutePoint[] = [];
 
     for (let i = 0; i <= numPoints; i++) {
@@ -48,11 +50,47 @@ export async function POST(request: NextRequest) {
       path.push({ lat, lng });
     }
 
-    // Calculate simple distance using Haversine formula
-    const distance = calculateDistance(start, end);
+    // Fetch elevation data for all points
+    console.log('Fetching elevation data for', path.length, 'points...');
+    const elevations = await fetchElevations(path);
 
-    // Estimate duration (assuming average hiking speed of 4 km/h)
-    const duration = (distance / 1000) / 4 * 3600; // in seconds
+    // Add elevation to path points
+    path.forEach((point, i) => {
+      point.elevation = elevations[i] || 0;
+    });
+
+    // Calculate elevation statistics
+    const elevationStats = calculateElevationStats(elevations);
+
+    // Create elevation profile
+    const elevationProfile = createElevationProfile(path, elevations);
+
+    // Calculate distance and duration with slope factors
+    let totalDistance = 0;
+    let totalDuration = 0; // in seconds
+    const baseSpeed = 4; // km/h on flat terrain
+
+    for (let i = 0; i < path.length - 1; i++) {
+      const segmentDistance = calculateDistance(path[i], path[i + 1]);
+      totalDistance += segmentDistance;
+
+      // Calculate slope between points
+      const slope = calculateSlope(
+        { ...path[i], elevation: elevations[i] },
+        { ...path[i + 1], elevation: elevations[i + 1] }
+      );
+
+      // Determine if uphill or downhill
+      const isUphill = elevations[i + 1] > elevations[i];
+
+      // Get slope factor (affects walking speed)
+      const slopeFactor = getSlopeFactor(slope, isUphill);
+
+      // Calculate segment duration
+      const segmentSpeedKmh = baseSpeed / slopeFactor;
+      const segmentDurationHours = segmentDistance / 1000 / segmentSpeedKmh;
+      totalDuration += segmentDurationHours * 3600; // convert to seconds
+    }
 
     const response: PathfindingResponse = {
       success: true,
@@ -61,8 +99,12 @@ export async function POST(request: NextRequest) {
         start,
         end,
         path,
-        distance,
-        duration,
+        distance: totalDistance,
+        duration: totalDuration,
+        elevation: {
+          ...elevationStats,
+          profile: elevationProfile,
+        },
       },
     };
 

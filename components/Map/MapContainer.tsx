@@ -3,7 +3,9 @@
 import { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import type { LatLng, MapMarker } from '@/types/map';
-import type { RoutePoint } from '@/types/route';
+import type { Route } from '@/types/route';
+import RouteStats from '../Stats/RouteStats';
+import ElevationProfile from '../Stats/ElevationProfile';
 
 // Dynamic import for SSR compatibility
 const BaseMap = dynamic(() => import('./BaseMap'), {
@@ -24,12 +26,12 @@ const RouteLayer = dynamic(() => import('./RouteLayer'), {
 });
 
 interface MapContainerProps {
-  onRouteCalculated?: (route: RoutePoint[]) => void;
+  onRouteCalculated?: (route: Route) => void;
 }
 
 export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
   const [markers, setMarkers] = useState<MapMarker[]>([]);
-  const [route, setRoute] = useState<RoutePoint[]>([]);
+  const [route, setRoute] = useState<Route | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
 
   const handleMarkerAdd = useCallback((position: LatLng, type: 'start' | 'end') => {
@@ -90,8 +92,8 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
       const data = await response.json();
 
       if (data.success && data.route) {
-        setRoute(data.route.path);
-        onRouteCalculated?.(data.route.path);
+        setRoute(data.route);
+        onRouteCalculated?.(data.route);
       }
     } catch (error) {
       console.error('Error calculating route:', error);
@@ -102,47 +104,58 @@ export default function MapContainer({ onRouteCalculated }: MapContainerProps) {
 
   const handleClearRoute = () => {
     setMarkers([]);
-    setRoute([]);
+    setRoute(null);
   };
 
   return (
-    <div className="relative w-full h-full">
-      <BaseMap center={{ lat: 55.7558, lng: 37.6173 }} zoom={10}>
-        <MarkerControls
-          markers={markers}
-          onMarkerAdd={handleMarkerAdd}
-          onMarkerMove={handleMarkerMove}
-        />
-        <RouteLayer route={route} />
-      </BaseMap>
+    <div className="relative w-full h-full flex">
+      {/* Map container */}
+      <div className="flex-1 relative">
+        <BaseMap center={{ lat: 55.7558, lng: 37.6173 }} zoom={10}>
+          <MarkerControls
+            markers={markers}
+            onMarkerAdd={handleMarkerAdd}
+            onMarkerMove={handleMarkerMove}
+          />
+          <RouteLayer route={route?.path || []} />
+        </BaseMap>
 
-      {/* Controls overlay */}
-      <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
-        {markers.length > 0 && (
-          <button
-            onClick={handleClearRoute}
-            className="bg-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-50 transition-colors font-medium text-sm"
-          >
-            Очистить маршрут
-          </button>
-        )}
-        {isCalculating && (
-          <div className="bg-white px-4 py-2 rounded-lg shadow-lg text-sm text-gray-600">
-            Расчёт маршрута...
+        {/* Controls overlay */}
+        <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
+          {markers.length > 0 && (
+            <button
+              onClick={handleClearRoute}
+              className="bg-white px-4 py-2 rounded-lg shadow-lg hover:bg-gray-50 transition-colors font-medium text-sm"
+            >
+              Очистить маршрут
+            </button>
+          )}
+          {isCalculating && (
+            <div className="bg-white px-4 py-2 rounded-lg shadow-lg text-sm text-gray-600">
+              Расчёт маршрута...
+            </div>
+          )}
+        </div>
+
+        {/* Instructions */}
+        {markers.length === 0 && (
+          <div className="absolute bottom-4 left-4 z-[1000] bg-white px-6 py-4 rounded-lg shadow-lg max-w-md">
+            <h3 className="font-bold text-lg mb-2">Начните работу</h3>
+            <ol className="list-decimal list-inside space-y-1 text-sm text-gray-700">
+              <li>Кликните по карте, чтобы установить <span className="text-green-600 font-medium">начальную точку</span></li>
+              <li>Кликните ещё раз, чтобы установить <span className="text-red-600 font-medium">конечную точку</span></li>
+              <li>Маршрут будет построен автоматически с учётом рельефа</li>
+              <li>Перетаскивайте маркеры для изменения маршрута</li>
+            </ol>
           </div>
         )}
       </div>
 
-      {/* Instructions */}
-      {markers.length === 0 && (
-        <div className="absolute bottom-4 left-4 z-[1000] bg-white px-6 py-4 rounded-lg shadow-lg max-w-md">
-          <h3 className="font-bold text-lg mb-2">Начните работу</h3>
-          <ol className="list-decimal list-inside space-y-1 text-sm text-gray-700">
-            <li>Кликните по карте, чтобы установить <span className="text-green-600 font-medium">начальную точку</span></li>
-            <li>Кликните ещё раз, чтобы установить <span className="text-red-600 font-medium">конечную точку</span></li>
-            <li>Маршрут будет построен автоматически</li>
-            <li>Перетаскивайте маркеры для изменения маршрута</li>
-          </ol>
+      {/* Statistics sidebar */}
+      {route && (
+        <div className="w-96 bg-gray-50 p-4 overflow-y-auto space-y-4">
+          <RouteStats route={route} />
+          {route.elevation && <ElevationProfile elevation={route.elevation} />}
         </div>
       )}
     </div>
