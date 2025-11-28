@@ -1,6 +1,7 @@
 import type { TerrainZone } from '@/types/terrain';
 import { calculateTerrainCoefficient } from './coefficients';
-import { classifyFeature, parseTrailAttributes } from '../osm/overpass';
+import { classifyFeature } from '../osm/parser';
+import { parseTrailAttributes } from '../osm/overpass';
 
 /**
  * Automatic terrain zoning system

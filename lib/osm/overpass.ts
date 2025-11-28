@@ -109,7 +109,7 @@ export function parseTrailAttributes(tags: Record<string, string> = {}) {
     trailType: tags.highway || tags.route || 'unknown',
     access: tags.access || 'yes',
     name: tags.name || undefined,
-    difficulty: tags.sac_scale || tags.mtb:scale || undefined,
+    difficulty: tags.sac_scale || tags['mtb:scale'] || undefined,
   };
 }
 

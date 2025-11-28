@@ -1,4 +1,5 @@
-import { LatLng, Route, PathfindingOptions } from './route';
+import { LatLng } from './map';
+import { Route, PathfindingOptions } from './route';
 
 // Pathfinding API
 export interface PathfindingRequest {
