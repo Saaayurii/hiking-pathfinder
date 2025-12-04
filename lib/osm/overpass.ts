@@ -3,6 +3,9 @@
  * Documentation: https://wiki.openstreetmap.org/wiki/Overpass_API
  */
 
+import { osmCache } from '@/lib/cache/memoryCache';
+import MemoryCache from '@/lib/cache/memoryCache';
+
 export interface OverpassBounds {
   south: number;
   west: number;
@@ -31,7 +34,15 @@ export interface OverpassResponse {
   elements: OverpassElement[];
 }
 
-const OVERPASS_API_URL = 'https://overpass-api.de/api/interpreter';
+// Multiple Overpass API servers for fallback
+const OVERPASS_SERVERS = [
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+];
+
+// Cache TTL: 10 minutes for OSM data
+const CACHE_TTL = 600;
 
 /**
  * Build Overpass QL query for hiking trails and terrain features
@@ -111,49 +122,76 @@ export function buildPathfindingQuery(bounds: OverpassBounds): string {
 }
 
 /**
- * Fetch data from Overpass API with retry logic
+ * Fetch data from Overpass API with caching, multiple servers, and retry logic
  */
 export async function fetchOverpassData(
   bounds: OverpassBounds,
   usePathfindingQuery = false,
-  retries = 2
+  retries = 1
 ): Promise<OverpassResponse> {
+  // Check cache first
+  const cacheKey = MemoryCache.boundsKey(bounds, usePathfindingQuery ? 'pathfinding' : 'trail');
+  const cached = osmCache.get<OverpassResponse>(cacheKey);
+  if (cached) {
+    console.log('  ✓ Using cached OSM data');
+    return cached;
+  }
+
   const query = usePathfindingQuery ? buildPathfindingQuery(bounds) : buildTrailQuery(bounds);
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000); // 15s timeout
+  // Try each server
+  for (let serverIndex = 0; serverIndex < OVERPASS_SERVERS.length; serverIndex++) {
+    const serverUrl = OVERPASS_SERVERS[serverIndex];
 
-      const response = await fetch(OVERPASS_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: controller.signal,
-      });
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout (reduced from 15s)
 
-      clearTimeout(timeout);
+        const response = await fetch(serverUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        throw new Error(`Overpass API error: ${response.statusText}`);
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          throw new Error(`Overpass API error: ${response.statusText}`);
+        }
+
+        const data: OverpassResponse = await response.json();
+
+        // Cache successful response
+        osmCache.set(cacheKey, data, CACHE_TTL);
+        console.log(`  ✓ OSM data fetched from ${new URL(serverUrl).hostname}`);
+
+        return data;
+      } catch (error) {
+        const isLastAttempt = attempt === retries;
+        const isLastServer = serverIndex === OVERPASS_SERVERS.length - 1;
+
+        if (!isLastAttempt) {
+          console.warn(`  Overpass API attempt ${attempt + 1} failed, retrying...`);
+          await new Promise(resolve => setTimeout(resolve, 500)); // Quick retry
+          continue;
+        }
+
+        if (!isLastServer) {
+          console.warn(`  Server ${new URL(serverUrl).hostname} failed, trying next server...`);
+          break; // Try next server
+        }
+
+        console.error('Error fetching Overpass data after all retries:', error);
+        throw error;
       }
-
-      const data: OverpassResponse = await response.json();
-      return data;
-    } catch (error) {
-      if (attempt < retries) {
-        console.warn(`Overpass API attempt ${attempt + 1} failed, retrying...`);
-        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1))); // Exponential backoff
-        continue;
-      }
-      console.error('Error fetching Overpass data after retries:', error);
-      throw error;
     }
   }
 
-  throw new Error('Failed to fetch Overpass data');
+  throw new Error('Failed to fetch Overpass data from all servers');
 }
 
 /**

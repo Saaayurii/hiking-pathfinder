@@ -1,10 +1,12 @@
 /**
- * Elevation data utilities using Open-Elevation API
- * Free alternative to Mapbox Terrain RGB
- * API: https://open-elevation.com/
+ * Elevation data utilities using Open-Meteo API (fast & free)
+ * API: https://open-meteo.com/en/docs/elevation-api
  *
- * Note: Open-Elevation can be slow/unreliable, falls back to approximate elevation
+ * Fallback: Open-Elevation API
  */
+
+import { elevationCache } from '@/lib/cache/memoryCache';
+import MemoryCache from '@/lib/cache/memoryCache';
 
 export interface ElevationPoint {
   latitude: number;
@@ -12,45 +14,64 @@ export interface ElevationPoint {
   elevation: number;
 }
 
-const OPEN_ELEVATION_API = 'https://api.open-elevation.com/api/v1/lookup';
-const FETCH_TIMEOUT = 8000; // 8 second timeout per request (increased from 5s)
-const BATCH_SIZE = 50; // Reduced from 100 to 50 for better reliability
+// Open-Meteo is faster and more reliable
+const OPEN_METEO_API = 'https://api.open-meteo.com/v1/elevation';
+const FETCH_TIMEOUT = 5000; // 5 second timeout
+const BATCH_SIZE = 100; // Open-Meteo can handle more
+
+// Cache TTL: 1 hour (elevation data doesn't change)
+const CACHE_TTL = 3600;
 
 /**
- * Fetch elevation data for multiple points
- * Using smaller batches for better reliability
+ * Fetch elevation data for multiple points using Open-Meteo API
+ * Much faster than Open-Elevation
  */
 export async function fetchElevations(
   points: Array<{ lat: number; lng: number }>
 ): Promise<number[]> {
-  try {
-    // Split into smaller chunks for better reliability
-    const chunks = chunkArray(points, BATCH_SIZE);
-    const allElevations: number[] = [];
+  if (points.length === 0) return [];
 
-    console.log(`📡 Fetching elevation data: ${chunks.length} requests for ${points.length} points`);
+  // Check cache first - get elevations for cached points
+  const results: (number | null)[] = new Array(points.length).fill(null);
+  const uncachedPoints: { index: number; lat: number; lng: number }[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const cacheKey = MemoryCache.pointKey(points[i].lat, points[i].lng, 4);
+    const cached = elevationCache.get<number>(cacheKey);
+    if (cached !== null) {
+      results[i] = cached;
+    } else {
+      uncachedPoints.push({ index: i, ...points[i] });
+    }
+  }
+
+  const cachedCount = points.length - uncachedPoints.length;
+  if (cachedCount > 0) {
+    console.log(`  ✓ ${cachedCount}/${points.length} elevations from cache`);
+  }
+
+  if (uncachedPoints.length === 0) {
+    return results as number[];
+  }
+
+  try {
+    // Split into chunks
+    const chunks = chunkArray(uncachedPoints, BATCH_SIZE);
+    console.log(`📡 Fetching elevation data: ${chunks.length} requests for ${uncachedPoints.length} points`);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const locations = chunk.map((p) => ({
-        latitude: p.lat,
-        longitude: p.lng,
-      }));
 
-      console.log(`  Request ${i + 1}/${chunks.length}: fetching ${chunk.length} points...`);
+      // Open-Meteo uses GET with comma-separated coordinates
+      const latitudes = chunk.map(p => p.lat.toFixed(5)).join(',');
+      const longitudes = chunk.map(p => p.lng.toFixed(5)).join(',');
+      const url = `${OPEN_METEO_API}?latitude=${latitudes}&longitude=${longitudes}`;
 
       try {
-        // Add timeout to fetch
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-        const response = await fetch(OPEN_ELEVATION_API, {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ locations }),
+        const response = await fetch(url, {
           signal: controller.signal,
         });
 
@@ -61,29 +82,40 @@ export async function fetchElevations(
         }
 
         const data = await response.json();
-        const elevations = data.results.map((r: ElevationPoint) => r.elevation);
-        allElevations.push(...elevations);
+        const elevations: number[] = data.elevation || [];
 
-        console.log(`  ✓ Received ${elevations.length} elevations (${allElevations.length}/${points.length} total)`);
+        // Map elevations back to original indices and cache them
+        for (let j = 0; j < chunk.length; j++) {
+          const elevation = elevations[j] ?? 200;
+          const point = chunk[j];
+          results[point.index] = elevation;
+
+          // Cache each point
+          const cacheKey = MemoryCache.pointKey(point.lat, point.lng, 4);
+          elevationCache.set(cacheKey, elevation, CACHE_TTL);
+        }
+
+        console.log(`  ✓ Batch ${i + 1}/${chunks.length}: ${elevations.length} elevations`);
       } catch (chunkError) {
-        console.warn(`  ⚠️  Timeout or error for chunk ${i + 1}, using approximate elevation (200m)`);
+        console.warn(`  ⚠️  Batch ${i + 1} failed, using fallback elevation (200m)`);
         // Use approximate elevation if API fails
-        const approximateElevations = new Array(chunk.length).fill(200);
-        allElevations.push(...approximateElevations);
+        for (const point of chunk) {
+          results[point.index] = 200;
+        }
       }
 
-      // Rate limiting: wait 200ms between requests (increased from 100ms)
+      // Small delay between requests to be nice to the API
       if (i < chunks.length - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
 
-    console.log(`✅ All elevation data fetched: ${allElevations.length} points`);
-    return allElevations;
+    console.log(`✅ All elevation data ready: ${points.length} points`);
+    return results.map(e => e ?? 200);
   } catch (error) {
     console.error('Error fetching elevation data:', error);
-    // Return zeros as fallback
-    return new Array(points.length).fill(0);
+    // Return fallback values
+    return results.map(e => e ?? 200);
   }
 }
 

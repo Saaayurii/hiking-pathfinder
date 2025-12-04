@@ -1,12 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import type { PathfindingResponse } from '@/types/api';
-import { fetchElevations, calculateElevationStats, createElevationProfile } from '@/lib/terrain/elevation';
-import { buildTerrainGraph, createNodeId } from '@/lib/pathfinding/graph';
-import { findPath, smoothPath } from '@/lib/pathfinding/astar';
-import { calculateDistance } from '@/lib/utils/geo';
-import { fetchOverpassData } from '@/lib/osm/overpass';
-import { extractTerrainFeatures, getTerrainCoefficientAtPoint, type TerrainFeature } from '@/lib/osm/terrain';
 
 const PathfindingRequestSchema = z.object({
   start: z.object({
@@ -17,259 +11,214 @@ const PathfindingRequestSchema = z.object({
     lat: z.number(),
     lng: z.number(),
   }),
-  waypoints: z.array(z.object({
-    lat: z.number(),
-    lng: z.number(),
-  })).optional(),
   options: z.object({
-    maxSlope: z.number().optional(),
-    coefficients: z.record(z.number()).optional(),
-    avoidTypes: z.array(z.string()).optional(),
-    preferOfficial: z.boolean().optional(),
-    minVisibility: z.string().optional(),
     gridSizeMeters: z.number().optional(),
   }).optional(),
 });
 
+// Simple elevation cache
+const elevationCache = new Map<string, number>();
+
 /**
- * A* pathfinding with terrain awareness
+ * Fast pathfinding - creates direct route with elevation data
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const validated = PathfindingRequestSchema.parse(body);
+    const { start, end } = validated;
 
-    const { start, end, options = {} } = validated;
+    console.log('🗺️  Fast pathfinding...');
+    console.log(`  Start: ${start.lat.toFixed(5)}, ${start.lng.toFixed(5)}`);
+    console.log(`  End: ${end.lat.toFixed(5)}, ${end.lng.toFixed(5)}`);
 
-    console.log('🗺️  Starting A* pathfinding...');
-    console.log(`  Start: ${start.lat}, ${start.lng}`);
-    console.log(`  End: ${end.lat}, ${end.lng}`);
-
-    // Step 0: Fetch OSM data for terrain and obstacles
-    console.log('🌍 Fetching OSM terrain data...');
-
-    // Dynamic grid size based on route distance
-    // For long routes, use larger grid to reduce memory usage
-    let gridSize = options.gridSizeMeters || 30; // Increased from 20 to 30
-    const distance = calculateDistance(start, end);
-
-    if (distance > 50000) { // > 50km
-      gridSize = 100; // 100m grid
-    } else if (distance > 20000) { // > 20km
-      gridSize = 50; // 50m grid
-    }
-
-    // Reduce padding for longer routes to limit grid size
-    const padding = distance > 20000 ? 0.005 : 0.01; // Smaller padding for long routes
-
-    const minLat = Math.min(start.lat, end.lat) - padding;
-    const maxLat = Math.max(start.lat, end.lat) + padding;
-    const minLng = Math.min(start.lng, end.lng) - padding;
-    const maxLng = Math.max(start.lng, end.lng) + padding;
-
-    const bounds = {
-      north: maxLat,
-      south: minLat,
-      east: maxLng,
-      west: minLng,
-    };
-
-    let osmData;
-    let terrainFeatures: TerrainFeature[] = [];
-
-    try {
-      // For short routes, try to get OSM data, but don't wait too long
-      if (distance < 5000) { // Only for routes < 5km
-        osmData = await fetchOverpassData(bounds, true); // Use pathfinding query
-        terrainFeatures = extractTerrainFeatures(osmData);
-        console.log(`  ✓ Loaded ${osmData.elements.length} OSM elements`);
-        console.log(`  ✓ Extracted ${terrainFeatures.length} terrain features`);
-      } else {
-        console.log('  ⊘ Skipping OSM data for long route (using default terrain)');
-      }
-    } catch (error) {
-      console.warn('  ⚠️  Failed to fetch OSM data, using default terrain');
-      // Continue without OSM data - will use default coefficients
-    }
-
-    // Step 1: Build terrain grid and fetch elevation data
-    console.log('📊 Building terrain grid...');
-
-    // Estimate grid points needed
-    const estimatedPoints = Math.ceil(distance / gridSize) * 10; // Rough estimate with padding
-
-    console.log(`  Grid size: ${gridSize}m`);
+    // Calculate distance
+    const distance = haversineDistance(start, end);
     console.log(`  Distance: ${(distance / 1000).toFixed(2)}km`);
-    console.log(`  Estimated grid points: ${estimatedPoints}`);
 
-    // Create grid points for elevation sampling
-    const gridPoints: Array<{ lat: number; lng: number }> = [];
-    const elevationDataMap = new Map<string, number>();
-    const terrainDataMap = new Map<string, { type: string; coefficient: number }>();
+    // Determine number of waypoints based on distance
+    const numPoints = Math.max(10, Math.min(50, Math.ceil(distance / 100)));
 
-    // Convert grid size to degrees
-    const latStep = gridSize / 111000;
-    const avgLat = (minLat + maxLat) / 2;
-    const lngStep = gridSize / (111000 * Math.cos((avgLat * Math.PI) / 180));
+    // Generate path points along straight line
+    const pathPoints: Array<{ lat: number; lng: number; elevation: number }> = [];
 
-    // Sample elevation data
-    const sampleRate = 2; // Sample every Nth point to reduce API calls
-    let pointCount = 0;
-
-    for (let lat = minLat; lat <= maxLat; lat += latStep * sampleRate) {
-      for (let lng = minLng; lng <= maxLng; lng += lngStep * sampleRate) {
-        gridPoints.push({ lat, lng });
-        pointCount++;
-      }
+    for (let i = 0; i <= numPoints; i++) {
+      const t = i / numPoints;
+      const lat = start.lat + (end.lat - start.lat) * t;
+      const lng = start.lng + (end.lng - start.lng) * t;
+      pathPoints.push({ lat, lng, elevation: 0 });
     }
 
-    console.log(`  Sampling ${gridPoints.length} elevation points...`);
-
-    // Fetch elevations (max 1000 points at a time)
-    if (gridPoints.length > 1000) {
-      console.warn(`  Too many points (${gridPoints.length}), using simplified grid`);
-      // Use coarser grid
-      const simplifiedGrid: Array<{ lat: number; lng: number }> = [];
-      const step = Math.ceil(gridPoints.length / 1000);
-      for (let i = 0; i < gridPoints.length; i += step) {
-        simplifiedGrid.push(gridPoints[i]);
-      }
-      gridPoints.length = 0;
-      gridPoints.push(...simplifiedGrid);
-      console.log(`  Simplified to ${gridPoints.length} points`);
+    // Fetch elevations in one batch
+    const elevations = await fetchElevationsBatch(pathPoints);
+    for (let i = 0; i < pathPoints.length; i++) {
+      pathPoints[i].elevation = elevations[i];
     }
 
-    const elevations = await fetchElevations(gridPoints);
+    // Calculate statistics
+    const stats = calculateRouteStats(pathPoints, distance);
 
-    // Map elevations to grid
-    gridPoints.forEach((point, i) => {
-      const nodeId = createNodeId(point.lat, point.lng);
-      const elevation = elevations[i] || 0;
-      elevationDataMap.set(nodeId, elevation);
-
-      // Get terrain data from OSM features
-      const terrainInfo = getTerrainCoefficientAtPoint(point, terrainFeatures);
-
-      terrainDataMap.set(nodeId, {
-        type: terrainInfo.type,
-        coefficient: terrainInfo.coefficient,
-      });
-    });
-
-    // Interpolate elevations for all grid points
-    for (let lat = minLat; lat <= maxLat; lat += latStep) {
-      for (let lng = minLng; lng <= maxLng; lng += lngStep) {
-        const nodeId = createNodeId(lat, lng);
-
-        if (!elevationDataMap.has(nodeId)) {
-          // Find nearest sampled point
-          let nearestDist = Infinity;
-          let nearestElev = 0;
-
-          for (const point of gridPoints) {
-            const dist = Math.abs(point.lat - lat) + Math.abs(point.lng - lng);
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              const nearestId = createNodeId(point.lat, point.lng);
-              nearestElev = elevationDataMap.get(nearestId) || 0;
-            }
-          }
-
-          elevationDataMap.set(nodeId, nearestElev);
-
-          // Get terrain data from OSM features
-          const terrainInfo = getTerrainCoefficientAtPoint({ lat, lng }, terrainFeatures);
-
-          terrainDataMap.set(nodeId, {
-            type: terrainInfo.type,
-            coefficient: terrainInfo.coefficient,
-          });
-        }
-      }
-    }
-
-    console.log(`✅ Elevation data ready (${elevationDataMap.size} points)`);
-
-    // Check if grid is too large
-    const MAX_NODES = 500000; // 500k nodes max to prevent memory issues
-    if (elevationDataMap.size > MAX_NODES) {
-      console.error(`❌ Grid too large: ${elevationDataMap.size} nodes (max: ${MAX_NODES})`);
-      return NextResponse.json({
-        success: false,
-        error: `Маршрут слишком длинный. Попробуйте сократить расстояние или выбрать точки ближе друг к другу. (${(distance / 1000).toFixed(1)}км)`,
-      }, { status: 400 });
-    }
-
-    // Step 2: Build graph
-    console.log('🕸️  Building pathfinding graph...');
-
-    const graph = await buildTerrainGraph(
-      start,
-      end,
-      elevationDataMap,
-      terrainDataMap,
-      options
-    );
-
-    console.log(`  Nodes: ${graph.nodes.size}`);
-    console.log(`  Edges: ${Array.from(graph.edges.values()).reduce((sum, edges) => sum + edges.length, 0)}`);
-
-    // Step 3: Run A* algorithm
-    console.log('🔍 Running A* algorithm...');
-
-    const result = findPath(graph, start, end);
-
-    if (!result) {
-      console.error('❌ No path found');
-      return NextResponse.json({
-        success: false,
-        error: 'No path found between start and end points. Try adjusting the route or increasing max slope.',
-      }, { status: 404 });
-    }
-
-    console.log(`✅ Path found!`);
-    console.log(`  Nodes explored: ${result.nodesExplored}`);
-    console.log(`  Path length: ${result.path.length} points`);
-    console.log(`  Distance: ${(result.distance / 1000).toFixed(2)}km`);
-
-    // Step 4: Smooth path (temporarily disabled for debugging)
-    // TODO: Fix smoothPath algorithm - currently over-simplifying routes
-    const smoothedPath = result.path; // smoothPath(result.path, 50);
-    console.log(`  Path points: ${smoothedPath.length}`);
-
-    // Step 5: Calculate statistics
-    const pathElevations = smoothedPath.map(p => p.elevation);
-    const elevationStats = calculateElevationStats(pathElevations);
-    const elevationProfile = createElevationProfile(smoothedPath, pathElevations);
+    console.log(`✅ Route calculated in ${numPoints + 1} points`);
 
     const response: PathfindingResponse = {
       success: true,
       route: {
-        name: 'Оптимальный маршрут (A*)',
+        name: 'Прямой маршрут',
         start,
         end,
-        path: smoothedPath,
-        distance: result.distance,
-        duration: result.duration,
+        path: pathPoints,
+        distance,
+        duration: stats.duration,
         elevation: {
-          ...elevationStats,
-          profile: elevationProfile,
+          gain: stats.elevationGain,
+          loss: stats.elevationLoss,
+          max: stats.maxElevation,
+          min: stats.minElevation,
+          profile: stats.profile,
         },
-        terrainFeatures, // Include terrain features for visualization
+        terrainFeatures: [], // No terrain features for fast mode
       },
     };
-
-    console.log('✨ Pathfinding complete!\n');
 
     return NextResponse.json(response);
   } catch (error) {
     console.error('❌ Pathfinding error:', error);
-
-    const response: PathfindingResponse = {
+    return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
-    };
-
-    return NextResponse.json(response, { status: 500 });
+      error: error instanceof Error ? error.message : 'Unknown error',
+    }, { status: 500 });
   }
+}
+
+/**
+ * Fetch elevations using Open-Meteo API (fast)
+ */
+async function fetchElevationsBatch(
+  points: Array<{ lat: number; lng: number }>
+): Promise<number[]> {
+  // Check cache first
+  const results: number[] = new Array(points.length).fill(200);
+  const uncached: { index: number; lat: number; lng: number }[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const key = `${points[i].lat.toFixed(4)},${points[i].lng.toFixed(4)}`;
+    const cached = elevationCache.get(key);
+    if (cached !== undefined) {
+      results[i] = cached;
+    } else {
+      uncached.push({ index: i, ...points[i] });
+    }
+  }
+
+  if (uncached.length === 0) {
+    return results;
+  }
+
+  try {
+    // Open-Meteo API - fast and reliable
+    const latitudes = uncached.map(p => p.lat.toFixed(5)).join(',');
+    const longitudes = uncached.map(p => p.lng.toFixed(5)).join(',');
+    const url = `https://api.open-meteo.com/v1/elevation?latitude=${latitudes}&longitude=${longitudes}`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      const data = await response.json();
+      const elevations: number[] = data.elevation || [];
+
+      for (let i = 0; i < uncached.length; i++) {
+        const elevation = elevations[i] ?? 200;
+        const point = uncached[i];
+        results[point.index] = elevation;
+
+        // Cache
+        const key = `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`;
+        elevationCache.set(key, elevation);
+      }
+    }
+  } catch (error) {
+    console.warn('Elevation fetch failed, using defaults');
+  }
+
+  return results;
+}
+
+/**
+ * Calculate route statistics
+ */
+function calculateRouteStats(
+  path: Array<{ lat: number; lng: number; elevation: number }>,
+  totalDistance: number
+) {
+  let elevationGain = 0;
+  let elevationLoss = 0;
+  let maxElevation = path[0]?.elevation || 0;
+  let minElevation = path[0]?.elevation || 0;
+
+  const profile: Array<{ distance: number; elevation: number }> = [];
+  let cumulativeDistance = 0;
+
+  for (let i = 0; i < path.length; i++) {
+    const point = path[i];
+
+    if (i > 0) {
+      const prev = path[i - 1];
+      const segmentDist = haversineDistance(prev, point);
+      cumulativeDistance += segmentDist;
+
+      const elevDiff = point.elevation - prev.elevation;
+      if (elevDiff > 0) {
+        elevationGain += elevDiff;
+      } else {
+        elevationLoss += Math.abs(elevDiff);
+      }
+    }
+
+    maxElevation = Math.max(maxElevation, point.elevation);
+    minElevation = Math.min(minElevation, point.elevation);
+
+    profile.push({
+      distance: cumulativeDistance,
+      elevation: point.elevation,
+    });
+  }
+
+  // Hiking speed: ~4 km/h base, slower uphill
+  const baseSpeed = 4000; // m/h
+  const uphillPenalty = elevationGain * 10; // 10 seconds per meter of climb
+  const baseDuration = (totalDistance / baseSpeed) * 3600;
+  const duration = baseDuration + uphillPenalty;
+
+  return {
+    elevationGain,
+    elevationLoss,
+    maxElevation,
+    minElevation,
+    duration,
+    profile,
+  };
+}
+
+/**
+ * Haversine distance in meters
+ */
+function haversineDistance(
+  p1: { lat: number; lng: number },
+  p2: { lat: number; lng: number }
+): number {
+  const R = 6371000;
+  const φ1 = (p1.lat * Math.PI) / 180;
+  const φ2 = (p2.lat * Math.PI) / 180;
+  const Δφ = ((p2.lat - p1.lat) * Math.PI) / 180;
+  const Δλ = ((p2.lng - p1.lng) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }

@@ -34,3 +34,36 @@ body {
   height: 100%;
   z-index: 0;
 }
+
+/* Hide OSM attribution and any flags/banners */
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+/* Custom Leaflet control styling for Russian locale */
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+  font-family: Arial, sans-serif !important;
+}
+
+/* Hide any Ukrainian flag banners from OSM */
+.leaflet-container a[href*="ukraine"],
+.leaflet-container .ukraine-banner,
+.leaflet-container [class*="ukraine"],
+.leaflet-container img[alt*="Ukraine"],
+.leaflet-container img[alt*="ukraine"] {
+  display: none !important;
+}
+
+/* Ensure layer control is styled properly */
+.leaflet-control-layers-toggle {
+  background-size: 20px 20px;
+}
+
+.leaflet-control-layers-list {
+  padding: 8px;
+}
+
+.leaflet-control-layers label {
+  font-size: 14px;
+}

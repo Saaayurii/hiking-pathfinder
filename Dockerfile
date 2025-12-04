@@ -6,7 +6,7 @@ RUN apk add --no-cache libc6-compat
 # Dependencies stage
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Development stage
 FROM base AS development
