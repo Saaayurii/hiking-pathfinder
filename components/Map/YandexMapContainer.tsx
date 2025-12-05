@@ -290,7 +290,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       console.log('✅ Route polyline added to map');
 
       // Draw terrain features if available
-      if (routeData.terrainFeatures) {
+      if (routeData.terrainFeatures && showTerrainZones) {
         const terrainColors: Record<string, string> = {
           building: '#8B4513',
           barrier: '#696969',
@@ -301,42 +301,139 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
           scrub: '#6B8E23',
           rock: '#A9A9A9',
           wetland: '#4682B4',
+          path: '#FFD700',
+          footway: '#FFD700',
+          track: '#DAA520',
+          cliff: '#8B0000',
+          wall: '#696969',
+          fence: '#A0522D',
         };
 
         const terrainOpacity: Record<string, number> = {
-          building: 0.7,
-          barrier: 0.6,
+          building: 0.6,
+          barrier: 0.5,
           water: 0.5,
-          railway: 0.6,
-          forest: 0.3,
-          grassland: 0.2,
+          railway: 0.5,
+          forest: 0.35,
+          grassland: 0.25,
           scrub: 0.3,
           rock: 0.4,
-          wetland: 0.4,
+          wetland: 0.45,
+          path: 0.4,
+          footway: 0.4,
+          track: 0.35,
+          cliff: 0.6,
+          wall: 0.5,
+          fence: 0.4,
         };
 
-        routeData.terrainFeatures.forEach((feature) => {
-          if (feature.geometry.length < 3) return;
+        const TERRAIN_NAMES: Record<string, string> = {
+          building: 'Здание',
+          wall: 'Стена',
+          fence: 'Забор',
+          water: 'Водоём',
+          waterway: 'Река/Ручей',
+          wetland: 'Болото',
+          forest: 'Лес',
+          grassland: 'Луг',
+          scrub: 'Кустарник',
+          rock: 'Скалы',
+          path: 'Тропа',
+          footway: 'Пешеходная дорожка',
+          track: 'Грунтовая дорога',
+          steps: 'Ступени',
+          residential: 'Жилая улица',
+          cliff: 'Обрыв',
+          railway: 'Железная дорога',
+          construction: 'Строительство',
+          barrier: 'Препятствие',
+          unknown: 'Неизвестно',
+        };
+
+        const getCoefficientLabel = (coef: number): string => {
+          if (coef <= 1.5) return 'Отличная проходимость';
+          if (coef <= 2.5) return 'Хорошая проходимость';
+          if (coef <= 4.0) return 'Средняя проходимость';
+          if (coef <= 6.0) return 'Затруднённая проходимость';
+          if (coef <= 8.0) return 'Очень сложно';
+          return 'Непроходимо';
+        };
+
+        console.log(`🗺️ Drawing ${routeData.terrainFeatures.length} terrain features`);
+
+        routeData.terrainFeatures.forEach((feature, index) => {
+          if (feature.geometry.length < 2) return;
 
           const coords = feature.geometry.map(p => [p.lat, p.lng]);
           const color = terrainColors[feature.type] || '#808080';
           const opacity = terrainOpacity[feature.type] || 0.3;
+          const terrainName = TERRAIN_NAMES[feature.type] || feature.type;
+          const passabilityText = feature.passable ? 'Проходимо' : 'Непроходимо';
+          const coefficientLabel = getCoefficientLabel(feature.coefficient);
 
-          const polygon = new window.ymaps.Polygon(
-            [coords],
-            { balloonContent: feature.type },
-            {
-              fillColor: color,
-              fillOpacity: opacity,
-              strokeColor: color,
-              strokeWidth: 1,
-              strokeOpacity: 0.8,
-            }
-          );
+          // Create balloon content with detailed info
+          const balloonContent = `
+            <div style="padding: 8px; min-width: 180px;">
+              <div style="font-weight: bold; font-size: 14px; margin-bottom: 8px; color: #1f2937;">${terrainName}</div>
+              <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <span style="width: 12px; height: 12px; border-radius: 50%; background-color: ${color}; display: inline-block;"></span>
+                <span style="color: ${feature.passable ? '#059669' : '#dc2626'}; font-weight: 500;">${passabilityText}</span>
+              </div>
+              <div style="color: #6b7280; font-size: 13px; margin-bottom: 2px;">
+                Коэффициент: <strong>${feature.coefficient.toFixed(1)}</strong>
+              </div>
+              <div style="color: #6b7280; font-size: 12px;">
+                ${coefficientLabel}
+              </div>
+              ${feature.tags?.name ? `<div style="color: #9ca3af; font-size: 12px; font-style: italic; margin-top: 4px;">${feature.tags.name}</div>` : ''}
+            </div>
+          `;
 
-          map.geoObjects.add(polygon);
-          terrainPolygonsRef.current.push(polygon);
+          // Check if polygon (closed) or polyline
+          const isPolygon = feature.geometry.length >= 3 &&
+            Math.abs(feature.geometry[0].lat - feature.geometry[feature.geometry.length - 1].lat) < 0.0001 &&
+            Math.abs(feature.geometry[0].lng - feature.geometry[feature.geometry.length - 1].lng) < 0.0001;
+
+          if (isPolygon) {
+            const polygon = new window.ymaps.Polygon(
+              [coords],
+              {
+                balloonContent,
+                hintContent: `${terrainName} - ${passabilityText}`,
+              },
+              {
+                fillColor: color,
+                fillOpacity: opacity,
+                strokeColor: color,
+                strokeWidth: feature.passable ? 1 : 2,
+                strokeOpacity: 0.8,
+                strokeStyle: feature.passable ? 'solid' : 'dash',
+              }
+            );
+
+            map.geoObjects.add(polygon);
+            terrainPolygonsRef.current.push(polygon);
+          } else {
+            // Draw as polyline for paths, rivers, etc.
+            const polyline = new window.ymaps.Polyline(
+              coords,
+              {
+                balloonContent,
+                hintContent: `${terrainName} - ${passabilityText}`,
+              },
+              {
+                strokeColor: color,
+                strokeWidth: 3,
+                strokeOpacity: 0.8,
+              }
+            );
+
+            map.geoObjects.add(polyline);
+            terrainPolygonsRef.current.push(polyline);
+          }
         });
+
+        console.log(`✅ Added ${terrainPolygonsRef.current.length} terrain objects to map`);
       }
 
       // Fit bounds to show entire route
@@ -347,7 +444,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
     } catch (error) {
       console.error('❌ Error drawing route:', error);
     }
-  }, [map, ymapsReady]);
+  }, [map, ymapsReady, showTerrainZones]);
 
   // Calculate route
   const calculateRoute = useCallback(async (currentMarkers: MapMarker[]) => {
@@ -704,9 +801,10 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
         )}
       </div>
 
-      {/* Statistics sidebar - desktop */}
-      {route && (
-        <div className="hidden lg:block w-96 bg-gray-50 dark:bg-gray-900 p-4 overflow-y-auto space-y-4 order-2">
+      {/* Sidebar - desktop - always visible */}
+      <div className="hidden lg:block w-96 bg-gray-50 dark:bg-gray-900 p-4 overflow-y-auto space-y-4 order-2">
+        {/* Actions - only when route exists */}
+        {route && (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4 space-y-3">
             <h3 className="font-bold text-sm text-gray-700 dark:text-gray-300">Действия</h3>
             <button
@@ -720,12 +818,31 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
             </button>
             <ExportButtons route={route} elevationCanvasRef={elevationCanvasRef} />
           </div>
+        )}
 
-          <TerrainSettings onCoefficientsChange={handleCoefficientsChange} />
-          <RouteStats route={route} />
-          {route.elevation && <ElevationProfile elevation={route.elevation} canvasRef={elevationCanvasRef} />}
-        </div>
-      )}
+        {/* Terrain settings - always visible */}
+        <TerrainSettings onCoefficientsChange={handleCoefficientsChange} />
+
+        {/* Route stats - only when route exists */}
+        {route && (
+          <>
+            <RouteStats route={route} />
+            {route.elevation && <ElevationProfile elevation={route.elevation} canvasRef={elevationCanvasRef} />}
+          </>
+        )}
+
+        {/* Instructions when no route */}
+        {!route && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4">
+            <h3 className="font-bold text-sm text-gray-700 dark:text-gray-300 mb-3">Как построить маршрут</h3>
+            <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600 dark:text-gray-400">
+              <li>Кликните по карте для <span className="text-green-600 font-medium">начала</span></li>
+              <li>Кликните ещё раз для <span className="text-red-600 font-medium">конца</span></li>
+              <li>Маршрут построится автоматически</li>
+            </ol>
+          </div>
+        )}
+      </div>
 
       {/* Mobile statistics panel */}
       {route && isMobileSidebarOpen && (
