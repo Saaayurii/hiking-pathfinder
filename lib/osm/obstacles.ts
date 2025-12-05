@@ -393,6 +393,11 @@ export function distanceToObstacle(
   point: { lat: number; lng: number },
   obstacle: Obstacle
 ): number {
+  // For closed polygons (buildings), check if point is inside
+  if (isClosedPolygon(obstacle.geometry) && isPointInsidePolygon(point, obstacle.geometry)) {
+    return 0; // Point is inside the obstacle
+  }
+
   let minDistance = Infinity;
 
   for (let i = 0; i < obstacle.geometry.length - 1; i++) {
@@ -401,6 +406,42 @@ export function distanceToObstacle(
   }
 
   return minDistance;
+}
+
+/**
+ * Проверить, является ли геометрия замкнутым полигоном
+ */
+function isClosedPolygon(geometry: Array<{ lat: number; lng: number }>): boolean {
+  if (geometry.length < 3) return false;
+  const first = geometry[0];
+  const last = geometry[geometry.length - 1];
+  return Math.abs(first.lat - last.lat) < 0.00001 && Math.abs(first.lng - last.lng) < 0.00001;
+}
+
+/**
+ * Проверить, находится ли точка внутри полигона (ray casting algorithm)
+ */
+export function isPointInsidePolygon(
+  point: { lat: number; lng: number },
+  polygon: Array<{ lat: number; lng: number }>
+): boolean {
+  let inside = false;
+  const x = point.lng;
+  const y = point.lat;
+
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].lng;
+    const yi = polygon[i].lat;
+    const xj = polygon[j].lng;
+    const yj = polygon[j].lat;
+
+    const intersect = ((yi > y) !== (yj > y)) &&
+      (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+
+    if (intersect) inside = !inside;
+  }
+
+  return inside;
 }
 
 /**

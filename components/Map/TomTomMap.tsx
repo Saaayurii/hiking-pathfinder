@@ -48,21 +48,36 @@ export default function TomTomMap({ center, zoom, children, onMapReady, onChange
       return;
     }
 
-    // Загружаем CSS
-    const cssLink = document.createElement('link');
-    cssLink.rel = 'stylesheet';
-    cssLink.href = 'https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps.css';
-    document.head.appendChild(cssLink);
+    // Проверяем, не загружен ли уже CSS
+    const existingCss = document.querySelector('link[href*="tomtom.com"]');
+    if (!existingCss) {
+      const cssLink = document.createElement('link');
+      cssLink.rel = 'stylesheet';
+      cssLink.href = 'https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps.css';
+      document.head.appendChild(cssLink);
+    }
+
+    // Проверяем, не загружается ли уже скрипт
+    const existingScript = document.querySelector('script[src*="tomtom.com"]');
+    if (existingScript) {
+      const checkReady = setInterval(() => {
+        if (window.tt) {
+          clearInterval(checkReady);
+          setTomtomReady(true);
+        }
+      }, 100);
+      return () => clearInterval(checkReady);
+    }
 
     // Загружаем JS
     const script = document.createElement('script');
     script.src = 'https://api.tomtom.com/maps-sdk-for-web/cdn/6.x/6.25.0/maps/maps-web.min.js';
     script.async = true;
     script.onload = () => {
-      setTomtomReady(true);
+      setTimeout(() => setTomtomReady(true), 100);
     };
     script.onerror = () => {
-      setError('Ошибка загрузки TomTom Maps');
+      setError('Ошибка загрузки TomTom Maps SDK');
     };
     document.body.appendChild(script);
 
@@ -81,6 +96,13 @@ export default function TomTomMap({ center, zoom, children, onMapReady, onChange
       return;
     }
 
+    // Проверяем, что tt объект полностью загружен
+    if (!window.tt || typeof window.tt.map !== 'function') {
+      console.error('TomTom SDK not fully loaded');
+      setError('TomTom SDK не загружен полностью');
+      return;
+    }
+
     try {
       const tomtomMap = window.tt.map({
         key: apiKey,
@@ -90,23 +112,39 @@ export default function TomTomMap({ center, zoom, children, onMapReady, onChange
         style: TOMTOM_STYLES[theme],
       });
 
-      // Добавляем контролы
-      tomtomMap.addControl(new window.tt.NavigationControl());
-      tomtomMap.addControl(new window.tt.FullscreenControl());
+      // Добавляем контролы после загрузки карты
+      tomtomMap.on('load', () => {
+        try {
+          tomtomMap.addControl(new window.tt.NavigationControl());
+          tomtomMap.addControl(new window.tt.FullscreenControl());
+        } catch (controlErr) {
+          console.warn('Failed to add controls:', controlErr);
+        }
+
+        if (onMapReady) {
+          onMapReady(tomtomMap);
+        }
+      });
+
+      // Обработка ошибок карты
+      tomtomMap.on('error', (e: any) => {
+        console.error('TomTom map error:', e);
+      });
 
       setMap(tomtomMap);
 
-      if (onMapReady) {
-        onMapReady(tomtomMap);
-      }
-
       return () => {
         if (tomtomMap) {
-          tomtomMap.remove();
+          try {
+            tomtomMap.remove();
+          } catch (removeErr) {
+            console.warn('Error removing map:', removeErr);
+          }
         }
       };
     } catch (error) {
       console.error('Error initializing TomTom map:', error);
+      setError('Ошибка инициализации карты TomTom');
     }
   }, [tomtomReady, center.lat, center.lng, zoom]);
 

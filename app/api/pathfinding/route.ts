@@ -245,6 +245,12 @@ function buildGraph(
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, any[]>();
 
+  // Pre-filter obstacles by type for performance
+  const buildingObstacles = obstacles.filter(o => o.type === 'building');
+  const otherObstacles = obstacles.filter(o => o.type !== 'building');
+
+  console.log(`  Buildings: ${buildingObstacles.length}, Other obstacles: ${otherObstacles.length}`);
+
   // Create grid nodes
   for (let lat = bounds.south; lat <= bounds.north; lat += latStep) {
     for (let lng = bounds.west; lng <= bounds.east; lng += lngStep) {
@@ -260,22 +266,39 @@ function buildGraph(
       let isBlocked = false;
       let obstaclePenalty = 0;
 
-      // Only check a sample of obstacles for performance
-      const obstacleCheckLimit = Math.min(100, obstacles.length);
-      for (let oi = 0; oi < obstacleCheckLimit; oi++) {
-        const obstacle = obstacles[oi];
+      // Check all buildings first (critical for pathfinding)
+      for (const obstacle of buildingObstacles) {
         if (!obstacle.properties.passable) {
-          // Check if point is too close to obstacle - use smaller avoidance distance
           const dist = distanceToObstacle(point, obstacle);
-          const avoidDist = Math.min(obstacle.properties.avoidanceDistance, 5); // Cap at 5m
+          const avoidDist = obstacle.properties.avoidanceDistance || 2;
           if (dist < avoidDist) {
             isBlocked = true;
             break;
           }
-          // Add smaller penalty for being near obstacles
-          if (dist < avoidDist * 2) {
+          // Add penalty for being near buildings
+          if (dist < avoidDist * 3) {
             obstaclePenalty = Math.max(obstaclePenalty,
-              (obstacle.properties.penaltyCoefficient * 0.05) * (1 - dist / (avoidDist * 2)));
+              (obstacle.properties.penaltyCoefficient * 0.1) * (1 - dist / (avoidDist * 3)));
+          }
+        }
+      }
+
+      // Check other obstacles with a limit for performance
+      if (!isBlocked) {
+        const otherCheckLimit = Math.min(100, otherObstacles.length);
+        for (let oi = 0; oi < otherCheckLimit; oi++) {
+          const obstacle = otherObstacles[oi];
+          if (!obstacle.properties.passable) {
+            const dist = distanceToObstacle(point, obstacle);
+            const avoidDist = obstacle.properties.avoidanceDistance || 2;
+            if (dist < avoidDist) {
+              isBlocked = true;
+              break;
+            }
+            if (dist < avoidDist * 2) {
+              obstaclePenalty = Math.max(obstaclePenalty,
+                (obstacle.properties.penaltyCoefficient * 0.05) * (1 - dist / (avoidDist * 2)));
+            }
           }
         }
       }
@@ -328,16 +351,29 @@ function buildGraph(
 
       if (!isWalkable(slope, maxSlope)) continue;
 
-      // Check for obstacle intersection (only critical obstacles like buildings)
+      // Check for obstacle intersection - check all buildings and impassable obstacles
       let pathBlocked = false;
-      const edgeCheckLimit = Math.min(50, obstacles.length);
-      for (let oi = 0; oi < edgeCheckLimit; oi++) {
-        const obstacle = obstacles[oi];
+
+      // Check all buildings for edge intersection (critical)
+      for (const obstacle of buildingObstacles) {
         if (!obstacle.properties.passable &&
-            obstacle.type === 'building' &&
             doesPathIntersectObstacle(node, neighbor, obstacle)) {
           pathBlocked = true;
           break;
+        }
+      }
+
+      // Check other impassable obstacles
+      if (!pathBlocked) {
+        const edgeCheckLimit = Math.min(50, otherObstacles.length);
+        for (let oi = 0; oi < edgeCheckLimit; oi++) {
+          const obstacle = otherObstacles[oi];
+          if (!obstacle.properties.passable &&
+              (obstacle.type === 'water' || obstacle.type === 'wall' || obstacle.type === 'cliff') &&
+              doesPathIntersectObstacle(node, neighbor, obstacle)) {
+            pathBlocked = true;
+            break;
+          }
         }
       }
       if (pathBlocked) continue;

@@ -15,6 +15,7 @@ import SaveRouteDialog from '../Export/SaveRouteDialog';
 import RouteHistory from '../Export/RouteHistory';
 import ThemeToggle from '../UI/ThemeToggle';
 import NatureZonesToggle from './NatureZonesToggle';
+import TerrainZonesLegend from './TerrainZonesLegend';
 import { ZONE_COLORS, ZONE_LABELS } from './NatureZonesLayer';
 
 const RouteProgress = dynamic(() => import('./RouteProgress'), { ssr: false });
@@ -54,6 +55,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showNatureZones, setShowNatureZones] = useState(false);
+  const [showTerrainZones, setShowTerrainZones] = useState(true);
   const [natureZones, setNatureZones] = useState<NatureZone[]>([]);
   const [isLoadingZones, setIsLoadingZones] = useState(false);
   const elevationCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -69,6 +71,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
   const markersRef = useRef<MapMarker[]>([]);
   const isCalculatingRef = useRef(false);
   const mapRef2 = useRef<any>(null); // Additional ref to access map in click handler
+  const calculateRouteRef = useRef<((markers: MapMarker[]) => void) | null>(null);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -217,7 +220,11 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       const hasEnd = updated.some(m => m.type === 'end');
 
       if (hasStart && hasEnd && !isCalculatingRef.current) {
-        setTimeout(() => calculateRoute(updated), 100);
+        setTimeout(() => {
+          if (calculateRouteRef.current) {
+            calculateRouteRef.current(updated);
+          }
+        }, 100);
       }
 
       return updated;
@@ -232,15 +239,118 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       );
 
       if (!isCalculatingRef.current) {
-        setTimeout(() => calculateRoute(updated), 100);
+        setTimeout(() => {
+          if (calculateRouteRef.current) {
+            calculateRouteRef.current(updated);
+          }
+        }, 100);
       }
 
       return updated;
     });
   }, []);
 
+  // Draw route on map - defined first so calculateRoute can use it
+  const drawRoute = useCallback((routeData: Route) => {
+    console.log('🎨 drawRoute called', { map: !!map, ymapsReady, pathLength: routeData.path?.length });
+
+    if (!map || !ymapsReady || !routeData.path) {
+      console.warn('⚠️ Cannot draw route: map not ready or no path');
+      return;
+    }
+
+    // Remove old route
+    if (routePolylineRef.current) {
+      map.geoObjects.remove(routePolylineRef.current);
+    }
+
+    // Remove old terrain polygons
+    terrainPolygonsRef.current.forEach(polygon => {
+      map.geoObjects.remove(polygon);
+    });
+    terrainPolygonsRef.current = [];
+
+    // Draw new route
+    const routeCoords = routeData.path.map(p => [p.lat, p.lng]);
+    console.log('📍 Route coords:', routeCoords.length, 'points');
+
+    try {
+      const polyline = new window.ymaps.Polyline(
+        routeCoords,
+        { balloonContent: `Маршрут: ${(routeData.distance / 1000).toFixed(2)} км` },
+        {
+          strokeColor: '#ef4444',
+          strokeWidth: 6,
+          strokeOpacity: 0.9,
+        }
+      );
+
+      map.geoObjects.add(polyline);
+      routePolylineRef.current = polyline;
+      console.log('✅ Route polyline added to map');
+
+      // Draw terrain features if available
+      if (routeData.terrainFeatures) {
+        const terrainColors: Record<string, string> = {
+          building: '#8B4513',
+          barrier: '#696969',
+          water: '#1E90FF',
+          railway: '#2F4F4F',
+          forest: '#228B22',
+          grassland: '#90EE90',
+          scrub: '#6B8E23',
+          rock: '#A9A9A9',
+          wetland: '#4682B4',
+        };
+
+        const terrainOpacity: Record<string, number> = {
+          building: 0.7,
+          barrier: 0.6,
+          water: 0.5,
+          railway: 0.6,
+          forest: 0.3,
+          grassland: 0.2,
+          scrub: 0.3,
+          rock: 0.4,
+          wetland: 0.4,
+        };
+
+        routeData.terrainFeatures.forEach((feature) => {
+          if (feature.geometry.length < 3) return;
+
+          const coords = feature.geometry.map(p => [p.lat, p.lng]);
+          const color = terrainColors[feature.type] || '#808080';
+          const opacity = terrainOpacity[feature.type] || 0.3;
+
+          const polygon = new window.ymaps.Polygon(
+            [coords],
+            { balloonContent: feature.type },
+            {
+              fillColor: color,
+              fillOpacity: opacity,
+              strokeColor: color,
+              strokeWidth: 1,
+              strokeOpacity: 0.8,
+            }
+          );
+
+          map.geoObjects.add(polygon);
+          terrainPolygonsRef.current.push(polygon);
+        });
+      }
+
+      // Fit bounds to show entire route
+      const bounds = polyline.geometry.getBounds();
+      if (bounds) {
+        map.setBounds(bounds, { checkZoomRange: true, zoomMargin: 50 });
+      }
+    } catch (error) {
+      console.error('❌ Error drawing route:', error);
+    }
+  }, [map, ymapsReady]);
+
   // Calculate route
-  const calculateRoute = async (currentMarkers: MapMarker[]) => {
+  const calculateRoute = useCallback(async (currentMarkers: MapMarker[]) => {
     const start = currentMarkers.find(m => m.type === 'start');
     const end = currentMarkers.find(m => m.type === 'end');
 
@@ -265,6 +375,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       });
 
       const data = await response.json();
+      console.log('📡 Route response:', { success: data.success, hasRoute: !!data.route, pathLength: data.route?.path?.length });
 
       if (data.success && data.route) {
         setCalculationStage('complete');
@@ -286,91 +397,12 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       clearTimeout(progressTimer2);
       clearTimeout(progressTimer3);
     }
-  };
+  }, [coefficients, drawRoute, onRouteCalculated]);
 
-  // Draw route on map
-  const drawRoute = useCallback((routeData: Route) => {
-    if (!map || !ymapsReady || !routeData.path) return;
-
-    // Remove old route
-    if (routePolylineRef.current) {
-      map.geoObjects.remove(routePolylineRef.current);
-    }
-
-    // Remove old terrain polygons
-    terrainPolygonsRef.current.forEach(polygon => {
-      map.geoObjects.remove(polygon);
-    });
-    terrainPolygonsRef.current = [];
-
-    // Draw new route
-    const routeCoords = routeData.path.map(p => [p.lat, p.lng]);
-    const polyline = new window.ymaps.Polyline(
-      routeCoords,
-      { balloonContent: `Маршрут: ${(routeData.distance / 1000).toFixed(2)} км` },
-      {
-        strokeColor: '#ef4444',
-        strokeWidth: 6,
-        strokeOpacity: 0.9,
-      }
-    );
-
-    map.geoObjects.add(polyline);
-    routePolylineRef.current = polyline;
-
-    // Draw terrain features if available
-    if (routeData.terrainFeatures) {
-      const terrainColors: Record<string, string> = {
-        building: '#8B4513',
-        barrier: '#696969',
-        water: '#1E90FF',
-        railway: '#2F4F4F',
-        forest: '#228B22',
-        grassland: '#90EE90',
-        scrub: '#6B8E23',
-        rock: '#A9A9A9',
-        wetland: '#4682B4',
-      };
-
-      const terrainOpacity: Record<string, number> = {
-        building: 0.7,
-        barrier: 0.6,
-        water: 0.5,
-        railway: 0.6,
-        forest: 0.3,
-        grassland: 0.2,
-        scrub: 0.3,
-        rock: 0.4,
-        wetland: 0.4,
-      };
-
-      routeData.terrainFeatures.forEach((feature) => {
-        if (feature.geometry.length < 3) return;
-
-        const coords = feature.geometry.map(p => [p.lat, p.lng]);
-        const color = terrainColors[feature.type] || '#808080';
-        const opacity = terrainOpacity[feature.type] || 0.3;
-
-        const polygon = new window.ymaps.Polygon(
-          [coords],
-          { balloonContent: feature.type },
-          {
-            fillColor: color,
-            fillOpacity: opacity,
-            strokeColor: color,
-            strokeWidth: 1,
-            strokeOpacity: 0.8,
-          }
-        );
-
-        map.geoObjects.add(polygon);
-        terrainPolygonsRef.current.push(polygon);
-      });
-    }
-
-    // Fit bounds to show entire route
-    map.setBounds(polyline.geometry.getBounds(), { checkZoomRange: true, zoomMargin: 50 });
-  }, [map, ymapsReady]);
+  // Keep calculateRouteRef in sync
+  useEffect(() => {
+    calculateRouteRef.current = calculateRoute;
+  }, [calculateRoute]);
 
   // Clear route
   const handleClearRoute = () => {
@@ -415,7 +447,11 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
   const handleCoefficientsChange = useCallback((newCoefficients: TerrainCoefficients) => {
     setCoefficients(newCoefficients);
     if (markers.length === 2 && !isCalculating) {
-      setTimeout(() => calculateRoute(markers), 100);
+      setTimeout(() => {
+        if (calculateRouteRef.current) {
+          calculateRouteRef.current(markers);
+        }
+      }, 100);
     }
   }, [markers, isCalculating]);
 
@@ -577,6 +613,21 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
             onToggle={handleToggleNatureZones}
             isLoading={isLoadingZones}
           />
+          {route?.terrainFeatures && route.terrainFeatures.length > 0 && (
+            <button
+              onClick={() => setShowTerrainZones(!showTerrainZones)}
+              className={`px-4 py-2 rounded-lg shadow-lg transition-colors font-medium text-sm flex items-center gap-2 ${
+                showTerrainZones
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              Зоны
+            </button>
+          )}
           <button
             onClick={() => setShowHistory(true)}
             className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium text-sm flex items-center gap-2 text-gray-700 dark:text-gray-300"
@@ -642,6 +693,13 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
               <li>Маршрут будет построен автоматически с учётом рельефа</li>
               <li>Перетаскивайте маркеры для изменения маршрута</li>
             </ol>
+          </div>
+        )}
+
+        {/* Terrain Zones Legend */}
+        {route?.terrainFeatures && route.terrainFeatures.length > 0 && showTerrainZones && (
+          <div className="absolute bottom-4 left-4 z-[1000]">
+            <TerrainZonesLegend collapsed={false} />
           </div>
         )}
       </div>
