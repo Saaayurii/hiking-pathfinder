@@ -46,6 +46,14 @@ const NatureZonesLayer = dynamic(() => import('./NatureZonesLayer'), {
   ssr: false,
 });
 
+const TerrainZonesLayer = dynamic(() => import('./TerrainZonesLayer'), {
+  ssr: false,
+});
+
+const TerrainZonesLegend = dynamic(() => import('./TerrainZonesLegend'), {
+  ssr: false,
+});
+
 interface MapContainerProps {
   onRouteCalculated?: (route: Route) => void;
   onChangeProvider?: () => void;
@@ -61,6 +69,7 @@ export default function MapContainer({ onRouteCalculated, onChangeProvider }: Ma
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showNatureZones, setShowNatureZones] = useState(false);
+  const [showTerrainZones, setShowTerrainZones] = useState(true);
   const elevationCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleMarkerAdd = useCallback((position: LatLng, type: 'start' | 'end') => {
@@ -197,17 +206,23 @@ export default function MapContainer({ onRouteCalculated, onChangeProvider }: Ma
       <div className="flex-1 relative order-2 lg:order-1">
         <BaseMap center={{ lat: 48.0159, lng: 37.8028 }} zoom={10}>
           <NatureZonesLayer enabled={showNatureZones} />
+          {showTerrainZones && route?.terrainFeatures && (
+            <TerrainZonesLayer features={route.terrainFeatures} showLabels={true} />
+          )}
           <MarkerControls
             markers={markers}
             onMarkerAdd={handleMarkerAdd}
             onMarkerMove={handleMarkerMove}
           />
-          {route?.terrainFeatures && <TerrainLayer features={route.terrainFeatures} />}
           <RouteLayer route={route?.path || []} />
         </BaseMap>
 
-        {/* Terrain Legend */}
-        {route?.terrainFeatures && route.terrainFeatures.length > 0 && <TerrainLegend />}
+        {/* Terrain Zones Legend */}
+        {route?.terrainFeatures && route.terrainFeatures.length > 0 && showTerrainZones && (
+          <div className="absolute bottom-4 left-4 z-[1000]">
+            <TerrainZonesLegend collapsed={false} />
+          </div>
+        )}
 
         {/* Controls overlay - desktop */}
         <div className="hidden lg:flex absolute top-4 right-4 z-[1000] flex-col gap-2">
@@ -226,6 +241,21 @@ export default function MapContainer({ onRouteCalculated, onChangeProvider }: Ma
             enabled={showNatureZones}
             onToggle={() => setShowNatureZones(!showNatureZones)}
           />
+          {route?.terrainFeatures && route.terrainFeatures.length > 0 && (
+            <button
+              onClick={() => setShowTerrainZones(!showTerrainZones)}
+              className={`px-4 py-2 rounded-lg shadow-lg transition-colors font-medium text-sm flex items-center gap-2 ${
+                showTerrainZones
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              Зоны
+            </button>
+          )}
           <button
             onClick={() => setShowHistory(true)}
             className="bg-white dark:bg-gray-800 px-4 py-2 rounded-lg shadow-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium text-sm flex items-center gap-2 text-gray-700 dark:text-gray-300"

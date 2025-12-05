@@ -18,7 +18,7 @@ export default function RouteProgress({ stage, message }: RouteProgressProps) {
   const stageInfo = STAGES[stage];
 
   return (
-    <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[2000] bg-white rounded-xl shadow-2xl p-6 min-w-[320px] max-w-md">
+    <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[2000] bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 min-w-[320px] max-w-md">
       <div className="space-y-4">
         {/* Header */}
         <div className="flex items-center gap-3">
@@ -45,20 +45,20 @@ export default function RouteProgress({ stage, message }: RouteProgressProps) {
             </svg>
           </div>
           <div className="flex-1">
-            <h3 className="font-bold text-lg text-black-900">Расчёт маршрута</h3>
-            <p className="text-sm text-black-600">{stageInfo.label}</p>
+            <h3 className="font-bold text-lg text-gray-900 dark:text-white">Расчёт маршрута</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{stageInfo.label}</p>
           </div>
         </div>
 
         {/* Progress bar */}
         <div className="space-y-2">
-          <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 overflow-hidden">
             <div
               className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
               style={{ width: `${stageInfo.progress}%` }}
             ></div>
           </div>
-          <div className="flex justify-between text-xs text-black-500">
+          <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
             <span>{stageInfo.progress}%</span>
             <span>Это может занять до 30 секунд</span>
           </div>
@@ -66,7 +66,7 @@ export default function RouteProgress({ stage, message }: RouteProgressProps) {
 
         {/* Optional message */}
         {message && (
-          <div className="text-xs text-black-500 bg-gray-50 rounded-lg p-3">
+          <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 rounded-lg p-3">
             {message}
           </div>
         )}
@@ -87,7 +87,7 @@ export default function RouteProgress({ stage, message }: RouteProgressProps) {
                       ? 'bg-green-500'
                       : isActive
                       ? 'bg-blue-600 animate-pulse'
-                      : 'bg-gray-300'
+                      : 'bg-gray-300 dark:bg-gray-600'
                   }`}
                 ></div>
               </div>

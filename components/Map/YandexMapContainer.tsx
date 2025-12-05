@@ -68,6 +68,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
   // Use refs for values needed in click handlers to avoid stale closures
   const markersRef = useRef<MapMarker[]>([]);
   const isCalculatingRef = useRef(false);
+  const mapRef2 = useRef<any>(null); // Additional ref to access map in click handler
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -77,6 +78,10 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
   useEffect(() => {
     isCalculatingRef.current = isCalculating;
   }, [isCalculating]);
+
+  useEffect(() => {
+    mapRef2.current = map;
+  }, [map]);
 
   // Load Yandex Maps API
   useEffect(() => {
@@ -118,12 +123,25 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       yandexMap.controls.add('fullscreenControl', { float: 'right' });
       yandexMap.controls.add('typeSelector', { float: 'right' });
 
-      // Click handler for adding markers
+      // Click handler for adding markers - use inline function that references yandexMap directly
       yandexMap.events.add('click', (e: any) => {
         const coords = e.get('coords');
-        handleMapClick({ lat: coords[0], lng: coords[1] });
+        const position = { lat: coords[0], lng: coords[1] };
+
+        // Use refs to get current state without stale closures
+        const currentMarkers = markersRef.current;
+        const hasStart = currentMarkers.some(m => m.type === 'start');
+        const hasEnd = currentMarkers.some(m => m.type === 'end');
+
+        if (!hasStart) {
+          addMarkerToMap(yandexMap, position, 'start');
+        } else if (!hasEnd) {
+          addMarkerToMap(yandexMap, position, 'end');
+        }
       });
 
+      // Store map reference immediately
+      mapRef2.current = yandexMap;
       setMap(yandexMap);
 
       return () => {
@@ -147,24 +165,9 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
     }
   }, [theme]);
 
-  // Handle map click - add markers (uses refs to avoid stale closures)
-  const handleMapClick = useCallback((position: LatLng) => {
-    if (!map || !ymapsReady) return;
-
-    const currentMarkers = markersRef.current;
-    const hasStart = currentMarkers.some(m => m.type === 'start');
-    const hasEnd = currentMarkers.some(m => m.type === 'end');
-
-    if (!hasStart) {
-      addMarker(position, 'start');
-    } else if (!hasEnd) {
-      addMarker(position, 'end');
-    }
-  }, [map, ymapsReady]);
-
-  // Add marker (uses refs to avoid stale closures)
-  const addMarker = useCallback((position: LatLng, type: 'start' | 'end') => {
-    if (!map || !ymapsReady) return;
+  // Add marker to map - accepts map instance directly to avoid stale closures
+  const addMarkerToMap = useCallback((mapInstance: any, position: LatLng, type: 'start' | 'end') => {
+    if (!mapInstance || !window.ymaps) return;
 
     const newMarker: MapMarker = {
       id: `${type}-${Date.now()}`,
@@ -185,22 +188,22 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
       }
     );
 
-    // Drag handler
+    // Drag handler - use mapRef2 to get current map
     placemark.events.add('dragend', () => {
       const coords = placemark.geometry.getCoordinates();
       moveMarker(newMarker.id, { lat: coords[0], lng: coords[1] });
     });
 
-    map.geoObjects.add(placemark);
+    mapInstance.geoObjects.add(placemark);
 
     if (type === 'start') {
       if (startPlacemarkRef.current) {
-        map.geoObjects.remove(startPlacemarkRef.current);
+        mapInstance.geoObjects.remove(startPlacemarkRef.current);
       }
       startPlacemarkRef.current = placemark;
     } else {
       if (endPlacemarkRef.current) {
-        map.geoObjects.remove(endPlacemarkRef.current);
+        mapInstance.geoObjects.remove(endPlacemarkRef.current);
       }
       endPlacemarkRef.current = placemark;
     }
@@ -219,7 +222,7 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
 
       return updated;
     });
-  }, [map, ymapsReady]);
+  }, []);
 
   // Move marker (uses refs to avoid stale closures)
   const moveMarker = useCallback((id: string, position: LatLng) => {
@@ -397,10 +400,12 @@ export default function YandexMapContainer({ onRouteCalculated, onChangeProvider
     handleClearRoute();
     setRoute(loadedRoute);
 
-    if (loadedRoute.start && loadedRoute.end) {
-      addMarker(loadedRoute.start, 'start');
+    if (loadedRoute.start && loadedRoute.end && mapRef2.current) {
+      addMarkerToMap(mapRef2.current, loadedRoute.start, 'start');
       setTimeout(() => {
-        addMarker(loadedRoute.end, 'end');
+        if (mapRef2.current) {
+          addMarkerToMap(mapRef2.current, loadedRoute.end, 'end');
+        }
         setTimeout(() => drawRoute(loadedRoute), 100);
       }, 100);
     }
